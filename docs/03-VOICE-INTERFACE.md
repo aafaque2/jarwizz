@@ -11,7 +11,7 @@
 
 | Stage | Tool (free/local) | Notes |
 |---|---|---|
-| Wake-word detection | openWakeWord (fully open-source) or Porcupine (free tier, easier setup, custom wake words) | Runs continuously in background, very low CPU footprint. Porcupine's free tier supports a custom wake word like "Jarwizz" — worth using early for reliability, switch to openWakeWord later if you want zero vendor dependency. |
+| Wake-word detection | openWakeWord (fully open-source, free forever, no account) | Runs continuously in background, very low CPU footprint. Picovoice/Porcupine discontinued its personal free tier in mid-2026 (now a 7-day trial aimed at companies), so openWakeWord is the recommended default — no signup, no time limit, no usage cap. |
 | Speech-to-text | faster-whisper (local, quantized Whisper) | Only runs after wake word triggers — not continuously, to save CPU/GPU. |
 | Text-to-speech | Piper (local, fast, good quality for a local model) | Used for spoken confirmations/responses. |
 | Audio I/O | sounddevice or PyAudio (Python) | Handles mic capture and speaker output. |
@@ -28,10 +28,11 @@
 ## 4. Wake-word setup steps
 
 1. Pick the phrase: "Jarwizz, wake up" (or shorter "Hey Jarwizz" if the full phrase proves less reliable — test both).
-2. If using Porcupine: use their free console to train a custom wake-word model file for your chosen phrase, download the `.ppn` file.
-3. If using openWakeWord: use their provided training notebook/scripts to generate a custom model, or start with a close built-in phrase while testing the pipeline, then swap in the custom one.
-4. Load the model in `voice-service/wakeword/listener.py`, running a continuous loop against the live mic stream.
+2. Start with one of openWakeWord's built-in pretrained models (e.g. "hey jarvis" is close enough phonetically to prototype the pipeline immediately) so you can validate the full wake→record→transcribe flow before training anything custom.
+3. Once the pipeline works end to end, train a real custom "Jarwizz" model using openWakeWord's provided training notebook (it synthesizes training audio from text-to-speech + noise augmentation — no need to record hundreds of samples yourself). This runs locally/in a free Colab notebook, no account or payment required.
+4. Load the resulting model in `voice-service/wakeword/listener.py`, running a continuous loop against the live mic stream.
 5. On detection, emit an event that the main voice-service loop picks up to start the recording window.
+6. Note: Picovoice/Porcupine's personal free tier was discontinued in mid-2026 (now a 7-day company trial only) — don't build against it. If you ever want a paid, more polished alternative later, it's an option, but openWakeWord is the free/local path for this project.
 
 ## 5. Command capture window
 

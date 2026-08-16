@@ -127,17 +127,15 @@ source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install faster-whisper piper-tts sounddevice numpy
 ```
 
-### Wake word — Porcupine (recommended to start, free tier, easiest custom wake word)
-```bash
-pip install pvporcupine pvrecorder
-```
-- Go to Picovoice Console (free account), create a custom wake word for "Jarwizz" (or "Hey Jarwizz"), download the `.ppn` model file into `voice-service/wakeword/`.
-
-### Alternative — openWakeWord (fully open-source, no account needed)
+### Wake word — openWakeWord (recommended default: fully open-source, free forever, no account)
 ```bash
 pip install openwakeword
 ```
-Use their training script/notebook to create a custom model if you want to avoid any third-party account dependency later.
+Note: Picovoice/Porcupine's personal free tier was discontinued in mid-2026 (it's now a 7-day trial gated behind a company email, aimed at product teams evaluating a paid plan) — don't build against it. openWakeWord has no account, no time limit, and no usage cap, so it's the right free/local default for this project.
+
+1. Start by testing with one of openWakeWord's built-in pretrained models (e.g. "hey jarvis") to validate your mic → wake-word → recording pipeline works before training anything custom.
+2. Once that works, use openWakeWord's training notebook (runs locally or in a free Colab notebook) to generate a custom "Jarwizz" model — it synthesizes training audio via TTS + noise augmentation, so you don't need to record hundreds of samples yourself.
+3. Drop the resulting model file into `voice-service/wakeword/`.
 
 ### Test the mic pipeline
 Create `voice-service/test_mic.py`:
