@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
+const path = require('path');
 const { WebSocketServer } = require('ws');
 require('dotenv').config();
 
@@ -160,6 +161,9 @@ app.post('/whitelist', (req, res) => {
 });
 
 initGmail();
+
+// ── Static: serve screenshots ──
+app.use('/screenshots', express.static(path.join(__dirname, '..', 'screenshots')));
 
 server.listen(PORT, () => {
   console.log(`Jarwizz backend running on port ${PORT}`);
