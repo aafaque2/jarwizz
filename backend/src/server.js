@@ -5,8 +5,9 @@ const { WebSocketServer } = require('ws');
 require('dotenv').config();
 
 const { generatePlan } = require('./model/ollamaClient');
-const { requestStop, runPlan, approveStep, rejectStep } = require('./orchestrator/taskRunner');
+const { requestStop, runPlan, approveStep, rejectStep, shutdown } = require('./orchestrator/taskRunner');
 const { readLogs } = require('./guardrails/logger');
+const { isWhitelisted, addToWhitelist, loadWhitelist } = require('./guardrails/whitelist');
 
 const app = express();
 app.use(cors());
@@ -96,6 +97,20 @@ app.get('/logs', (req, res) => {
   res.json(readLogs());
 });
 
+app.get('/whitelist', (req, res) => {
+  res.json(loadWhitelist());
+});
+
+app.post('/whitelist', (req, res) => {
+  const { domain } = req.body;
+  if (!domain) return res.status(400).json({ error: 'Missing domain' });
+  addToWhitelist(domain);
+  res.json({ status: 'added', domain });
+});
+
 server.listen(PORT, () => {
   console.log(`Jarwizz backend running on port ${PORT}`);
 });
+
+process.on('SIGINT', async () => { await shutdown(); process.exit(0); });
+process.on('SIGTERM', async () => { await shutdown(); process.exit(0); });

@@ -45,8 +45,12 @@ function validateTier(step) {
   }
 
   // Hard override: certain action types are NEVER irreversible
+  // Cap them at reversible max — they are safe by nature
   if (READ_ONLY_ACTION_TYPES.has(action_type) && correctedTier === 'irreversible') {
     correctedTier = 'read-only';
+  }
+  if (REVERSIBLE_ACTION_TYPES.has(action_type) && correctedTier === 'irreversible') {
+    correctedTier = 'reversible';
   }
 
   // Escalation: if model says read-only but action_type is known reversible, escalate
