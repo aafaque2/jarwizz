@@ -8,6 +8,7 @@ const { generatePlan } = require('./model/ollamaClient');
 const { requestStop, runPlan, approveStep, rejectStep, shutdown } = require('./orchestrator/taskRunner');
 const { readLogs } = require('./guardrails/logger');
 const { isWhitelisted, addToWhitelist, loadWhitelist } = require('./guardrails/whitelist');
+const { initGmail, getAuthUrl, completeAuth, isMockMode } = require('./integrations/gmail/client');
 
 const app = express();
 app.use(cors());
@@ -34,7 +35,7 @@ function broadcast(event, data) {
 }
 
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', service: 'jarwizz-backend' });
+  res.json({ status: 'ok', service: 'jarwizz-backend', gmail: isMockMode() ? 'mock' : 'connected' });
 });
 
 app.post('/command', async (req, res) => {
@@ -101,12 +102,33 @@ app.get('/whitelist', (req, res) => {
   res.json(loadWhitelist());
 });
 
+app.get('/gmail/auth-url', (req, res) => {
+  try {
+    res.json({ url: getAuthUrl() });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/gmail/callback', async (req, res) => {
+  const { code } = req.body;
+  if (!code) return res.status(400).json({ error: 'Missing auth code' });
+  try {
+    await completeAuth(code);
+    res.json({ status: 'connected' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post('/whitelist', (req, res) => {
   const { domain } = req.body;
   if (!domain) return res.status(400).json({ error: 'Missing domain' });
   addToWhitelist(domain);
   res.json({ status: 'added', domain });
 });
+
+initGmail();
 
 server.listen(PORT, () => {
   console.log(`Jarwizz backend running on port ${PORT}`);

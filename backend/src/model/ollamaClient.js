@@ -60,10 +60,77 @@ OUTPUT FORMAT (strict JSON):
   ]
 }`;
 
+/**
+ * Detect Gmail-related commands and build the correct plan directly.
+ * Returns null if the command isn't a recognized Gmail pattern.
+ * This bypasses the 3B model which can't reliably use gmail_* action types.
+ */
+function buildGmailPlan(cmd) {
+  const { randomUUID } = require('crypto');
+  const sid = () => randomUUID();
+
+  // Read emails
+  if ((cmd.includes('read') || cmd.includes('check') || cmd.includes('show') || cmd.includes('list') || cmd.includes('summary'))
+      && (cmd.includes('email') || cmd.includes('mail') || cmd.includes('inbox'))) {
+    const countMatch = cmd.match(/(\d+)\s*(most recent|latest|newest|recent)?/);
+    const count = countMatch ? parseInt(countMatch[1]) : 3;
+    return {
+      steps: [{
+        step_id: sid(),
+        description: `Read ${count} recent emails`,
+        action_type: 'gmail_read',
+        payload: { count },
+        tier: 'read-only',
+      }],
+    };
+  }
+
+  // Draft email
+  if ((cmd.includes('draft') || cmd.includes('compose') || cmd.includes('write'))
+      && (cmd.includes('email') || cmd.includes('mail'))
+      && !cmd.includes('send')) {
+    const toMatch = cmd.match(/to\s+([\w._%+-]+@[\w.-]+\.\w+)/i);
+    const to = toMatch ? toMatch[1] : '';
+    // Extract the body: everything after "saying", "with body", "that says", etc.
+    const bodyMatch = cmd.match(/(?:saying|with body|that says|body|content|message)\s+["']?(.+?)["']?\s*$/i)
+      || cmd.match(/(?:saying|with body|that says)\s+(.+)/i);
+    const body = bodyMatch ? bodyMatch[1].replace(/["']/g, '').trim() : commandText;
+    return {
+      steps: [{
+        step_id: sid(),
+        description: `Draft email to ${to || 'recipient'}`,
+        action_type: 'gmail_draft',
+        payload: { to, subject: 'Draft', body },
+        tier: 'reversible',
+      }],
+    };
+  }
+
+  // Send email (explicit send command)
+  if (cmd.includes('send') && (cmd.includes('email') || cmd.includes('mail') || cmd.includes('draft'))) {
+    return {
+      steps: [{
+        step_id: sid(),
+        description: 'Send email',
+        action_type: 'gmail_send',
+        payload: {},
+        tier: 'irreversible',
+      }],
+    };
+  }
+
+  return null; // Not a Gmail command — let the model handle it
+}
+
 async function generatePlan(commandText, memoryContext = '') {
   const userMessage = memoryContext
     ? `Context from memory:\n${memoryContext}\n\nUser command: ${commandText}`
     : `User command: ${commandText}`;
+
+  // Command-level intercept: detect known Gmail patterns and bypass the model
+  const lowerCmd = commandText.toLowerCase();
+  const gmailIntercept = buildGmailPlan(lowerCmd);
+  if (gmailIntercept) return gmailIntercept;
 
   const response = await fetch(`${OLLAMA_URL}/api/chat`, {
     method: 'POST',
@@ -110,6 +177,40 @@ async function generatePlan(commandText, memoryContext = '') {
     if (!step.payload) step.payload = {};
     if (!validTiers.includes(step.tier)) {
       step.tier = 'irreversible'; // default to safest
+    }
+  }
+
+  // Post-process: rewrite browser-based Gmail actions into proper API actions
+  // (the 3B model often ignores gmail_* action types and uses browser_* instead)
+  // Only trigger when the URL is actually Gmail or the action is already gmail_*
+  for (const step of plan.steps) {
+    const desc = (step.description || '').toLowerCase();
+    const url = (step.payload?.url || '').toLowerCase();
+    const isGmailUrl = url.includes('mail.google.com');
+    const isGmailAction = step.action_type.startsWith('gmail_');
+
+    // Convert gmail_open (non-existent action) back to browser_open
+    if (step.action_type === 'gmail_open') {
+      step.action_type = 'browser_open';
+    }
+
+    if (isGmailUrl || isGmailAction) {
+      if (step.action_type === 'browser_read' || (step.action_type === 'gmail_read')) {
+        step.action_type = 'gmail_read';
+        step.payload = { query: step.payload?.selector || '' };
+        step.tier = 'read-only';
+      } else if (step.action_type === 'browser_type' && (desc.includes('draft') || desc.includes('compose') || desc.includes('write'))) {
+        step.action_type = 'gmail_draft';
+        step.payload = {
+          to: step.payload?.selector || '',
+          subject: 'Draft',
+          body: step.payload?.text || '',
+        };
+        step.tier = 'reversible';
+      } else if (desc.includes('send') && (step.action_type === 'browser_click' || step.action_type === 'browser_open')) {
+        step.action_type = 'gmail_send';
+        step.tier = 'irreversible';
+      }
     }
   }
 

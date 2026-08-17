@@ -17,6 +17,7 @@ const REVERSIBLE_ACTION_TYPES = new Set([
   'browser_type',
   'browser_scroll',
   'gmail_draft',
+  'gmail_open',
   'file_create',
   'app_open',
   'search_web',

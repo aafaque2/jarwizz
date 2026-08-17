@@ -5,7 +5,7 @@
  *   2. Browser automation (Playwright) — for websites without a usable API
  *   3. Desktop/screen control — only for native apps, or when 1 and 2 aren't possible
  *
- * Phase 3 only implements channel 2 (browser). API and desktop are placeholder stubs.
+ * Phase 3: browser. Phase 4: API (Gmail). Desktop is a placeholder stub.
  */
 function chooseChannel(step) {
   const { action_type } = step;

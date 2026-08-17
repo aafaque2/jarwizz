@@ -5,6 +5,7 @@ const { enforceDomainWhitelist } = require('../guardrails/whitelist');
 const { chooseChannel } = require('../router/chooseChannel');
 const { executeBrowserAction } = require('../automation/browser/handlers');
 const { closeBrowser } = require('../automation/browser/playwrightRunner');
+const { readRecentEmails, draftEmail, sendEmail } = require('../integrations/gmail/client');
 
 let stopFlag = false;
 const pendingApprovals = new Map();
@@ -31,7 +32,6 @@ function rejectStep(stepId) {
 
 /**
  * Execute a single step via the appropriate channel.
- * For browser steps, uses a shared Playwright page within a task.
  */
 async function executeStep(step, sharedPages) {
   const channel = chooseChannel(step);
@@ -46,7 +46,27 @@ async function executeStep(step, sharedPages) {
     return { channel, ...result };
   }
 
-  // API / Desktop channels — future phases, simulated for now
+  if (channel === 'api') {
+    const p = step.payload || {};
+    switch (step.action_type) {
+      case 'gmail_read': {
+        const emails = await readRecentEmails(p.count || 3);
+        return { channel, output: { emails }, screenshotBefore: null, screenshotAfter: null };
+      }
+      case 'gmail_draft': {
+        const draft = await draftEmail(p.to, p.subject, p.body);
+        return { channel, output: { draft }, screenshotBefore: null, screenshotAfter: null };
+      }
+      case 'gmail_send': {
+        const sent = await sendEmail(p.draft_id);
+        return { channel, output: { sent }, screenshotBefore: null, screenshotAfter: null };
+      }
+      default:
+        return { channel, output: { simulated: true }, screenshotBefore: null, screenshotAfter: null };
+    }
+  }
+
+  // Desktop — future phases
   return { channel, output: { simulated: true }, screenshotBefore: null, screenshotAfter: null };
 }
 
