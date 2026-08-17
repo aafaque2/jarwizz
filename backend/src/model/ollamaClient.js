@@ -1,3 +1,5 @@
+const { recallRelevant } = require('../memory/store');
+
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.1:8b';
 
@@ -123,14 +125,26 @@ function buildGmailPlan(cmd) {
 }
 
 async function generatePlan(commandText, memoryContext = '') {
-  const userMessage = memoryContext
-    ? `Context from memory:\n${memoryContext}\n\nUser command: ${commandText}`
-    : `User command: ${commandText}`;
-
   // Command-level intercept: detect known Gmail patterns and bypass the model
   const lowerCmd = commandText.toLowerCase();
   const gmailIntercept = buildGmailPlan(lowerCmd);
   if (gmailIntercept) return gmailIntercept;
+
+  // Retrieve relevant memory (preferences + past tasks) for context
+  let memoryContextStr = memoryContext || '';
+  try {
+    const recalled = await recallRelevant(commandText, 3);
+    const parts = [];
+    if (recalled.preferences) parts.push(`User preferences:\n${recalled.preferences}`);
+    if (recalled.memories.length > 0) {
+      parts.push(`Relevant past tasks:\n${recalled.memories.map(m => `- ${m.text} → ${m.summary}`).join('\n')}`);
+    }
+    if (parts.length) memoryContextStr = parts.join('\n\n');
+  } catch {}
+
+  const userMessage = memoryContextStr
+    ? `Context from memory:\n${memoryContextStr}\n\nUser command: ${commandText}`
+    : `User command: ${commandText}`;
 
   const response = await fetch(`${OLLAMA_URL}/api/chat`, {
     method: 'POST',

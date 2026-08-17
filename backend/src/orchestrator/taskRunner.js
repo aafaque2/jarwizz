@@ -6,6 +6,7 @@ const { chooseChannel } = require('../router/chooseChannel');
 const { executeBrowserAction } = require('../automation/browser/handlers');
 const { closeBrowser } = require('../automation/browser/playwrightRunner');
 const { readRecentEmails, draftEmail, sendEmail } = require('../integrations/gmail/client');
+const { storeTaskHistory } = require('../memory/store');
 
 let stopFlag = false;
 const pendingApprovals = new Map();
@@ -160,6 +161,12 @@ async function runPlan(plan, broadcast) {
   }
 
   // Don't close browser — keep alive for follow-up tasks
+
+  // Store task in memory for future recall (non-blocking)
+  storeTaskHistory(plan._originalCommand || 'unknown command', results).catch(err => {
+    console.warn('[MEMORY] Failed to store task:', err.message);
+  });
+
   return { task_id: taskId, results };
 }
 

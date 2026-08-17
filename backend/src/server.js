@@ -9,6 +9,7 @@ const { requestStop, runPlan, approveStep, rejectStep, shutdown } = require('./o
 const { readLogs } = require('./guardrails/logger');
 const { isWhitelisted, addToWhitelist, loadWhitelist } = require('./guardrails/whitelist');
 const { initGmail, getAuthUrl, completeAuth, isMockMode } = require('./integrations/gmail/client');
+const { setPreference, getPreference, getAllPreferences, deletePreference, getRecentTasks, closeDb } = require('./memory/store');
 
 const app = express();
 app.use(cors());
@@ -56,6 +57,7 @@ app.post('/command', async (req, res) => {
     broadcast('plan_created', { plan });
 
     // Execute plan (may pause for approval on irreversible steps)
+    plan._originalCommand = text;
     const { task_id, results } = await runPlan(plan, broadcast);
 
     res.json({ task_id, plan, results });
@@ -121,6 +123,35 @@ app.post('/gmail/callback', async (req, res) => {
   }
 });
 
+// ── Preferences ──
+app.get('/preferences', (req, res) => {
+  res.json(getAllPreferences());
+});
+
+app.get('/preferences/:key', (req, res) => {
+  const value = getPreference(req.params.key);
+  if (value === null) return res.status(404).json({ error: 'Not found' });
+  res.json({ key: req.params.key, value });
+});
+
+app.post('/preferences', (req, res) => {
+  const { key, value } = req.body;
+  if (!key || value === undefined) return res.status(400).json({ error: 'Missing key or value' });
+  setPreference(key, value);
+  res.json({ status: 'set', key, value });
+});
+
+app.delete('/preferences/:key', (req, res) => {
+  deletePreference(req.params.key);
+  res.json({ status: 'deleted', key: req.params.key });
+});
+
+// ── Memory / Task History ──
+app.get('/memory/history', (req, res) => {
+  const limit = parseInt(req.query.limit) || 10;
+  res.json(getRecentTasks(limit));
+});
+
 app.post('/whitelist', (req, res) => {
   const { domain } = req.body;
   if (!domain) return res.status(400).json({ error: 'Missing domain' });
@@ -134,5 +165,5 @@ server.listen(PORT, () => {
   console.log(`Jarwizz backend running on port ${PORT}`);
 });
 
-process.on('SIGINT', async () => { await shutdown(); process.exit(0); });
-process.on('SIGTERM', async () => { await shutdown(); process.exit(0); });
+process.on('SIGINT', async () => { closeDb(); await shutdown(); process.exit(0); });
+process.on('SIGTERM', async () => { closeDb(); await shutdown(); process.exit(0); });
