@@ -1,77 +1,62 @@
 const { recallRelevant } = require('../memory/store');
 
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama3.1:8b';
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:7b';
 
-const SYSTEM_PROMPT = `You are the planning engine for Jarwizz, a voice-activated AI assistant.
-Given a user command, break it into discrete steps. Each step must be classified by risk tier.
+const SYSTEM_PROMPT = `You are Jarwizz, a voice-activated AI assistant. Given a user command, create a plan of discrete steps.
 
-RISK TIERS (classify every step into exactly one):
-- "read-only": Viewing, reading, summarizing, searching, answering questions. Never modifies anything.
-- "reversible": Opening apps/sites, scrolling, navigating, creating files/folders, drafting (not sending) emails, typing into fields. Can be undone.
-- "irreversible": Sending emails, submitting forms, deleting files/folders, any payment, changing account settings, submitting job applications. CANNOT be undone.
+ACTION TYPES (use exactly these):
+- browser_open: Open a URL. Payload: { "url": "https://..." }
+- browser_click: Click an element. Payload: { "selector": "CSS selector", "url": "https://..." }
+- browser_type: Type text into a field. Payload: { "selector": "CSS selector", "text": "text to type", "url": "https://..." }
+- browser_scroll: Scroll the page. Payload: { "direction": "down|up", "url": "https://..." }
+- browser_read: Read page content. Payload: { "url": "https://...", "selector": "optional CSS selector" }
+- gmail_read: Read emails. Payload: { "count": 3, "query": "optional search" }
+- gmail_draft: Draft an email. Payload: { "to": "email", "subject": "...", "body": "..." }
+- gmail_send: Send an email (use only when explicitly asked to send). Payload: { "draft_id": "..." }
+- file_create: Create a file. Payload: { "path": "...", "content": "..." }
+- file_delete: Delete a file. Payload: { "path": "..." }
+- app_open: Open an application. Payload: { "target": "app name" }
+- answer_question: Answer from knowledge or summarize. Payload: { "source": "llm", "query": "..." }
+
+RISK TIERS (classify every step):
+- "read-only": Viewing, reading, searching, answering. Never modifies anything.
+- "reversible": Opening sites, scrolling, navigating, drafting emails, typing. Can be undone.
+- "irreversible": Sending emails, deleting files, submitting forms. CANNOT be undone. Default when unsure.
 
 RULES:
-- Default to "irreversible" when unsure — safety first.
-- Each step must include an action_type from: browser_open, browser_click, browser_type, browser_scroll, browser_read, gmail_read, gmail_draft, gmail_send, file_create, file_delete, app_open, search_web, summarize, answer_question.
+- When the user asks to search, look up, or find something online, use browser steps to search Google. Do NOT answer from your own knowledge.
 - Keep steps atomic — one action per step.
 - Return ONLY valid JSON, no markdown, no explanation.
-- PAYLOAD IS REQUIRED AND MUST BE SPECIFIC. Never return empty payload {}.
+- Payloads must be specific. Never return empty payload {}.
+- CRITICAL: For CSS selectors in JSON, use SINGLE quotes inside the value (e.g. "selector": "textarea[name='q']"). Never use double quotes inside JSON string values — it breaks JSON parsing.
+- Use real CSS selectors that exist on the target page (e.g., textarea[name='q'] for Google search input).
 
-PAYLOAD SCHEMAS (use exactly these keys):
+EXAMPLES:
 
-For browser_open:
-  { "url": "https://example.com" }
+User: "search for AI news"
+{"steps":[{"description":"Open Google","action_type":"browser_open","payload":{"url":"https://www.google.com"},"tier":"reversible"},{"description":"Type search query","action_type":"browser_type","payload":{"selector":"textarea[name='q']","text":"AI news","url":"https://www.google.com"},"tier":"reversible"},{"description":"Submit search","action_type":"browser_click","payload":{"selector":"input[name='btnK']","url":"https://www.google.com"},"tier":"reversible"}]}
 
-For browser_click:
-  { "selector": "CSS selector or visible text of the element to click", "url": "https://page-url.com" }
+User: "read my last 5 emails"
+{"steps":[{"description":"Read 5 recent emails","action_type":"gmail_read","payload":{"count":5},"tier":"read-only"}]}
 
-For browser_type:
-  { "selector": "CSS selector or visible text of the input field", "text": "text to type", "url": "https://page-url.com" }
+User: "draft an email to john@example.com saying meeting tomorrow at 3pm"
+{"steps":[{"description":"Draft email to john@example.com","action_type":"gmail_draft","payload":{"to":"john@example.com","subject":"Meeting","body":"Hi John, just wanted to let you know we have a meeting scheduled for tomorrow at 3pm."},"tier":"reversible"}]}
 
-For browser_scroll:
-  { "direction": "down or up", "url": "https://page-url.com" }
+User: "what is the capital of France"
+{"steps":[{"description":"Answer user question","action_type":"answer_question","payload":{"source":"llm","query":"What is the capital of France?"},"tier":"read-only"}]}
 
-For browser_read:
-  { "url": "https://page-url.com", "selector": "optional CSS selector to read specific element, or omit for full page" }
-
-For gmail_send / gmail_draft:
-  { "to": "email address", "subject": "email subject", "body": "email body text" }
-
-For gmail_read:
-  { "query": "optional search query" }
-
-For file_create / file_delete:
-  { "path": "relative or absolute file path", "content": "file content (for create only)" }
-
-For summarize / answer_question:
-  { "source": "what to summarize or answer from", "query": "the user's question" }
-
-For all others:
-  { "target": "the target of this action" }
-
-OUTPUT FORMAT (strict JSON):
-{
-  "steps": [
-    {
-      "description": "human-readable description of what this step does",
-      "action_type": "one of the action types listed above",
-      "payload": { ... exact payload for this action_type ... },
-      "tier": "read-only | reversible | irreversible"
-    }
-  ]
-}`;
+User: "open youtube and search for lo-fi beats"
+{"steps":[{"description":"Open YouTube","action_type":"browser_open","payload":{"url":"https://www.youtube.com"},"tier":"reversible"},{"description":"Search for lo-fi beats","action_type":"browser_type","payload":{"selector":"input#search","text":"lo-fi beats","url":"https://www.youtube.com"},"tier":"reversible"},{"description":"Submit search","action_type":"browser_click","payload":{"selector":"button#search-icon-legacy","url":"https://www.youtube.com"},"tier":"reversible"}]}`;
 
 /**
  * Detect Gmail-related commands and build the correct plan directly.
  * Returns null if the command isn't a recognized Gmail pattern.
- * This bypasses the 3B model which can't reliably use gmail_* action types.
  */
 function buildGmailPlan(cmd) {
   const { randomUUID } = require('crypto');
   const sid = () => randomUUID();
 
-  // Read emails
   if ((cmd.includes('read') || cmd.includes('check') || cmd.includes('show') || cmd.includes('list') || cmd.includes('summary'))
       && (cmd.includes('email') || cmd.includes('mail') || cmd.includes('inbox'))) {
     const countMatch = cmd.match(/(\d+)\s*(most recent|latest|newest|recent)?/);
@@ -87,16 +72,14 @@ function buildGmailPlan(cmd) {
     };
   }
 
-  // Draft email
   if ((cmd.includes('draft') || cmd.includes('compose') || cmd.includes('write'))
       && (cmd.includes('email') || cmd.includes('mail'))
       && !cmd.includes('send')) {
     const toMatch = cmd.match(/to\s+([\w._%+-]+@[\w.-]+\.\w+)/i);
     const to = toMatch ? toMatch[1] : '';
-    // Extract the body: everything after "saying", "with body", "that says", etc.
     const bodyMatch = cmd.match(/(?:saying|with body|that says|body|content|message)\s+["']?(.+?)["']?\s*$/i)
       || cmd.match(/(?:saying|with body|that says)\s+(.+)/i);
-    const body = bodyMatch ? bodyMatch[1].replace(/["']/g, '').trim() : commandText;
+    const body = bodyMatch ? bodyMatch[1].replace(/["']/g, '').trim() : cmd;
     return {
       steps: [{
         step_id: sid(),
@@ -108,7 +91,6 @@ function buildGmailPlan(cmd) {
     };
   }
 
-  // Send email (explicit send command)
   if (cmd.includes('send') && (cmd.includes('email') || cmd.includes('mail') || cmd.includes('draft'))) {
     return {
       steps: [{
@@ -121,16 +103,62 @@ function buildGmailPlan(cmd) {
     };
   }
 
-  return null; // Not a Gmail command — let the model handle it
+  return null;
 }
 
-async function generatePlan(commandText, memoryContext = '') {
-  // Command-level intercept: detect known Gmail patterns and bypass the model
-  const lowerCmd = commandText.toLowerCase();
+async function generatePlan(commandText, memoryContext = '', conversationContext = '') {
+  const lowerCmd = commandText.toLowerCase().trim();
+  const { randomUUID } = require('crypto');
+  const sid = () => randomUUID();
+
+  const replyStep = (text, description = 'Respond to user') => ({
+    steps: [{
+      step_id: sid(),
+      description,
+      action_type: 'answer_question',
+      payload: { source: 'assistant', query: lowerCmd },
+      tier: 'read-only',
+    }],
+    _conversational: true,
+    _reply: text,
+  });
+
+  // 1. GREETINGS (exact match — fast, no LLM)
+  const greetings = {
+    hello: 'Hello! How can I help you today?',
+    hi: 'Hey there! What can I do for you?',
+    hey: 'Hey! What would you like me to do?',
+    'good morning': 'Good morning! How can I assist you?',
+    'good afternoon': 'Good afternoon! What can I help with?',
+    'good evening': 'Good evening! How can I help?',
+    thanks: "You're welcome! Let me know if you need anything else.",
+    thank: "You're welcome!",
+    'thank you': "You're welcome! Happy to help.",
+    bye: 'Goodbye! Have a great day.',
+    goodbye: 'Goodbye! Come back anytime.',
+  };
+  if (greetings[lowerCmd]) return replyStep(greetings[lowerCmd]);
+
+  // 2. DATE / TIME (system clock — always accurate)
+  const dateMatch = lowerCmd.replace(/[?!.,]/g, '').match(/\b(date|time|day|today|tomorrow|yesterday|clock|month|year)\b/);
+  const isDateCommand = dateMatch && (
+    /\b(what|when|which|tell|give|know|current|right now)\b/.test(lowerCmd) ||
+    lowerCmd.replace(/[?!.,]/g, '').split(/\s+/).filter(w => !['the', "what's", 'a', 'an', 'is', 'it'].includes(w)).length <= 3
+  );
+  if (isDateCommand) {
+    const now = new Date();
+    const dateStr = now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+    const timeStr = now.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    const isTimeOnly = lowerCmd.includes('time') && !lowerCmd.includes('date') && !lowerCmd.includes('day');
+    const reply = isTimeOnly ? `It's ${timeStr}.` : `Today is ${dateStr}, and it's ${timeStr}.`;
+    return replyStep(reply, 'Tell user the date/time');
+  }
+
+  // 3. Gmail intercept (model sometimes confuses browser vs API for Gmail)
   const gmailIntercept = buildGmailPlan(lowerCmd);
   if (gmailIntercept) return gmailIntercept;
 
-  // Retrieve relevant memory (preferences + past tasks) for context
+  // 4. Everything else goes to the model — no more intercepts
   let memoryContextStr = memoryContext || '';
   try {
     const recalled = await recallRelevant(commandText, 3);
@@ -140,21 +168,37 @@ async function generatePlan(commandText, memoryContext = '') {
       parts.push(`Relevant past tasks:\n${recalled.memories.map(m => `- ${m.text} → ${m.summary}`).join('\n')}`);
     }
     if (parts.length) memoryContextStr = parts.join('\n\n');
+
+    // Unload embed model from VRAM so the 7B model gets full GPU
+    fetch(`${OLLAMA_URL}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'nomic-embed-text', keep_alive: 0 }),
+    }).catch(() => {});
   } catch {}
 
+  const now = new Date();
+  const systemContext = `Current date/time: ${now.toISOString()} (${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}, ${now.toLocaleTimeString('en-US')}).`;
+
+  // Build messages array with conversation history
+  const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
+
+  // Inject conversation history if available
+  if (conversationContext) {
+    messages.push({ role: 'system', content: `Previous conversation:\n${conversationContext}` });
+  }
+
   const userMessage = memoryContextStr
-    ? `Context from memory:\n${memoryContextStr}\n\nUser command: ${commandText}`
-    : `User command: ${commandText}`;
+    ? `${systemContext}\nContext from memory:\n${memoryContextStr}\n\nUser command: ${commandText}`
+    : `${systemContext}\nUser command: ${commandText}`;
+  messages.push({ role: 'user', content: userMessage });
 
   const response = await fetch(`${OLLAMA_URL}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       model: OLLAMA_MODEL,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userMessage },
-      ],
+      messages,
       stream: false,
       format: 'json',
     }),
@@ -175,51 +219,69 @@ async function generatePlan(commandText, memoryContext = '') {
   try {
     plan = JSON.parse(content);
   } catch {
-    throw new Error(`Failed to parse model output as JSON: ${content}`);
+    // Fix common model JSON errors: unescaped quotes in CSS selectors
+    // e.g. {"selector":"input[name="q"]} → {"selector":"input[name='q']"}
+    let fixed = content
+      .replace(/"selector"\s*:\s*"([^"]*?)"/gs, (_, val) => {
+        // Replace unescaped inner double quotes in selector values with single quotes
+        return `"selector": "${val.replace(/(?<=[=\[])"|"(?=[\]])/g, "'")}"`;
+      })
+      .replace(/"target"\s*:\s*"([^"]*?)"/gs, (_, val) => {
+        return `"target": "${val.replace(/(?<=[=\[])"|"(?=[\]])/g, "'")}"`;
+      });
+
+    // Also try: extract JSON from markdown code blocks
+    const jsonMatch = fixed.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) fixed = jsonMatch[1];
+
+    try {
+      plan = JSON.parse(fixed);
+    } catch {
+      throw new Error(`Failed to parse model output as JSON: ${content.substring(0, 200)}`);
+    }
   }
 
-  // Validate structure
   if (!plan.steps || !Array.isArray(plan.steps)) {
     throw new Error(`Model output missing 'steps' array: ${content}`);
   }
 
-  // Ensure every step has required fields and a valid tier
+  // Post-process: validate and fix steps
   const validTiers = ['read-only', 'reversible', 'irreversible'];
+  const validActionTypes = [
+    'browser_open', 'browser_click', 'browser_type', 'browser_scroll', 'browser_read',
+    'gmail_read', 'gmail_draft', 'gmail_send',
+    'file_create', 'file_delete', 'app_open',
+    'summarize', 'answer_question',
+  ];
   for (const step of plan.steps) {
     if (!step.description) step.description = 'Unnamed step';
     if (!step.action_type) step.action_type = 'unknown';
     if (!step.payload) step.payload = {};
-    if (!validTiers.includes(step.tier)) {
-      step.tier = 'irreversible'; // default to safest
+    if (!validTiers.includes(step.tier)) step.tier = 'irreversible';
+    if (!validActionTypes.includes(step.action_type)) {
+      step.action_type = 'answer_question';
+      step.payload = { source: 'llm', query: step.description };
+      step.tier = 'read-only';
     }
   }
 
-  // Post-process: rewrite browser-based Gmail actions into proper API actions
-  // (the 3B model often ignores gmail_* action types and uses browser_* instead)
-  // Only trigger when the URL is actually Gmail or the action is already gmail_*
+  // Post-process: Gmail URL detection (safety net)
   for (const step of plan.steps) {
     const desc = (step.description || '').toLowerCase();
     const url = (step.payload?.url || '').toLowerCase();
     const isGmailUrl = url.includes('mail.google.com');
     const isGmailAction = step.action_type.startsWith('gmail_');
 
-    // Convert gmail_open (non-existent action) back to browser_open
-    if (step.action_type === 'gmail_open') {
-      step.action_type = 'browser_open';
-    }
+    if (step.action_type === 'gmail_open') step.action_type = 'browser_open';
 
     if (isGmailUrl || isGmailAction) {
-      if (step.action_type === 'browser_read' || (step.action_type === 'gmail_read')) {
+      if (step.action_type === 'browser_read' || step.action_type === 'gmail_read') {
         step.action_type = 'gmail_read';
         step.payload = { query: step.payload?.selector || '' };
         step.tier = 'read-only';
       } else if (step.action_type === 'browser_type' && (desc.includes('draft') || desc.includes('compose') || desc.includes('write'))) {
         step.action_type = 'gmail_draft';
-        step.payload = {
-          to: step.payload?.selector || '',
-          subject: 'Draft',
-          body: step.payload?.text || '',
-        };
+        step.payload = { to: step.payload?.selector || '', subject: 'Draft', body: step.payload?.text || '' };
         step.tier = 'reversible';
       } else if (desc.includes('send') && (step.action_type === 'browser_click' || step.action_type === 'browser_open')) {
         step.action_type = 'gmail_send';
@@ -227,6 +289,27 @@ async function generatePlan(commandText, memoryContext = '') {
       }
     }
   }
+
+  // Post-process: ensure Google search has submit step
+  // browser_type auto-presses Enter on search pages, so remove redundant click steps
+  for (const step of plan.steps) {
+    if (step.action_type === 'browser_click') {
+      const sel = (step.payload?.selector || '').toLowerCase();
+      const url = (step.payload?.url || '').toLowerCase();
+      const desc = (step.description || '').toLowerCase();
+      // Remove clicks that are clearly "submit search" on Google/Bing/DuckDuckGo
+      const isSearchSubmit = (sel.includes('btnk') || sel.includes('submit') || desc.includes('submit'))
+        && (url.includes('google') || url.includes('bing') || url.includes('duckduckgo'));
+      // Also remove any click that follows a type on Google (type already auto-submits)
+      const isAfterGoogleType = plan.steps.some(s =>
+        s.action_type === 'browser_type' && (s.payload?.url || '').includes('google')
+      ) && (url.includes('google') || desc.includes('search'));
+      if (isSearchSubmit || isAfterGoogleType) {
+        step.action_type = '_skip';
+      }
+    }
+  }
+  plan.steps = plan.steps.filter(s => s.action_type !== '_skip');
 
   return plan;
 }
