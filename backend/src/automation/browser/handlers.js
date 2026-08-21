@@ -10,11 +10,15 @@ function inferUrlFromPayload(payload) {
  * Smart click: tries CSS selector first, then getByText, then getByRole('link').
  */
 async function smartClick(page, selectorStr, timeout) {
-  // 1. Try CSS selector
-  try {
-    const el = page.locator(selectorStr).first();
-    if (await el.count() > 0) { await el.click({ timeout }); return; }
-  } catch {}
+  const hasRealSelector = selectorStr && selectorStr.trim() && !selectorStr.includes('""') && !selectorStr.includes("''");
+
+  // 1. Try CSS selector (only if valid)
+  if (hasRealSelector) {
+    try {
+      const el = page.locator(selectorStr).first();
+      if (await el.count({ timeout: 3000 }) > 0) { await el.click({ timeout }); return; }
+    } catch {}
+  }
 
   // 2. Try getByText (exact)
   try {
@@ -43,6 +47,82 @@ async function smartClick(page, selectorStr, timeout) {
   throw new Error(`Could not find clickable element matching "${selectorStr}"`);
 }
 
+/**
+ * Smart type: tries multiple strategies to find an input field and fill it.
+ * Handles cases where the model guesses wrong CSS selectors (e.g. input[type='text'] on Google).
+ */
+async function smartType(page, selectorStr, text, timeout) {
+  // Skip empty/broken selectors
+  const hasRealSelector = selectorStr && selectorStr.trim() && !selectorStr.includes('""') && !selectorStr.includes("''");
+
+  // 1. Try original CSS selector (only if it looks valid)
+  if (hasRealSelector) {
+    try {
+      const el = page.locator(selectorStr).first();
+      if (await el.count({ timeout: 3000 }) > 0) { await el.fill(text, { timeout }); return; }
+    } catch {}
+  }
+
+  // 2. Try getByRole('textbox') — most generic
+  try {
+    const el = page.getByRole('textbox').first();
+    if (await el.count({ timeout: 3000 }) > 0) { await el.fill(text, { timeout }); return; }
+  } catch {}
+
+  // 3. Try getByRole('searchbox') — for search inputs
+  try {
+    const el = page.getByRole('searchbox').first();
+    if (await el.count({ timeout: 3000 }) > 0) { await el.fill(text, { timeout }); return; }
+  } catch {}
+
+  // 4. Try getByPlaceholder
+  if (selectorStr) {
+    try {
+      const el = page.getByPlaceholder(selectorStr, { exact: false }).first();
+      if (await el.count() > 0) { await el.fill(text, { timeout }); return; }
+    } catch {}
+  }
+
+  // 5. Try common search input selectors (Google uses textarea, not input)
+  const commonSelectors = [
+    'textarea[name="q"]',       // Google (2025+ — textarea not input)
+    'input[name="q"]',          // Google (legacy)
+    'input[name="search"]',     // Generic search
+    'textarea[name="search"]',  // Generic search
+    'input[name="query"]',      // Generic
+    'textarea[name="query"]',   // Generic
+    'input[name="s"]',          // WordPress
+    'input[type="search"]',     // HTML5 search input
+    'textarea:visible',          // Any visible textarea
+    'input[type="text"]',       // Generic text
+    'input:visible',            // Any visible input
+  ];
+  for (const sel of commonSelectors) {
+    try {
+      const el = page.locator(sel).first();
+      if (await el.count() > 0) { await el.fill(text, { timeout }); return; }
+    } catch {}
+  }
+
+  // 6. Try getByLabel if selector looks like a label
+  if (selectorStr) {
+    try {
+      const el = page.getByLabel(selectorStr, { exact: false }).first();
+      if (await el.count() > 0) { await el.fill(text, { timeout }); return; }
+    } catch {}
+  }
+
+  throw new Error(`Could not find input field${selectorStr ? ` matching "${selectorStr}"` : ''}`);
+}
+
+/**
+ * After typing in a search box, press Enter to submit.
+ * Called by browser_type handler for search-like pages.
+ */
+async function pressEnter(page) {
+  await page.keyboard.press('Enter');
+}
+
 async function executeBrowserAction(actionType, payload, sharedPage) {
   const page = sharedPage || await newPage();
 
@@ -55,6 +135,8 @@ async function executeBrowserAction(actionType, payload, sharedPage) {
       case 'browser_open':
         screenshotBefore = await screenshot(page, 'before-open').catch(() => null);
         await page.goto(payload.url || payload.target, { waitUntil: 'domcontentloaded', timeout: BROWSER_TIMEOUT });
+        // Wait for JS to render interactive elements
+        await page.waitForTimeout(2000).catch(() => {});
         screenshotAfter = await screenshot(page, 'after-open').catch(() => null);
         output = { url: page.url(), title: await page.title() };
         break;
@@ -77,26 +159,22 @@ async function executeBrowserAction(actionType, payload, sharedPage) {
         const url = inferUrlFromPayload(payload);
         if (url && !page.url().includes(new URL(url).hostname)) {
           await page.goto(url, { waitUntil: 'domcontentloaded', timeout: BROWSER_TIMEOUT });
+          // Wait for page JS to render interactive elements (Google loads textarea async)
+          await page.waitForTimeout(2000).catch(() => {});
         }
         screenshotBefore = await screenshot(page, 'before-type').catch(() => null);
-        const selectorStr = payload.selector || payload.target;
-        // Try multiple strategies to find the input
-        let locator = null;
-        const candidates = [];
-        if (selectorStr) {
-          candidates.push(
-            page.locator(selectorStr).first(),
-            page.getByPlaceholder(selectorStr).first(),
-          );
+        await smartType(page, payload.selector || payload.target, payload.text || '', BROWSER_TIMEOUT);
+
+        // Auto-press Enter on search pages (Google, Bing, DuckDuckGo) to submit query
+        const curUrl = page.url().toLowerCase();
+        const isSearchPage = curUrl.includes('google.') || curUrl.includes('bing.com') || curUrl.includes('duckduckgo.');
+        if (isSearchPage) {
+          await page.keyboard.press('Enter');
+          await page.waitForLoadState('domcontentloaded').catch(() => {});
         }
-        candidates.push(page.getByRole('textbox').first());
-        for (const strategy of candidates) {
-          try { if (await strategy.count() > 0) { locator = strategy; break; } } catch {}
-        }
-        if (!locator) throw new Error(`Could not find input field${selectorStr ? ` matching "${selectorStr}"` : ''}`);
-        await locator.fill(payload.text || '', { timeout: BROWSER_TIMEOUT });
+
         screenshotAfter = await screenshot(page, 'after-type').catch(() => null);
-        output = { filled: payload.text, selector: selectorStr || 'first-textbox' };
+        output = { filled: payload.text, selector: payload.selector || payload.target || 'auto-detected' };
         break;
       }
 
@@ -120,15 +198,44 @@ async function executeBrowserAction(actionType, payload, sharedPage) {
         const url = inferUrlFromPayload(payload);
         if (url && !page.url().includes(new URL(url).hostname)) {
           await page.goto(url, { waitUntil: 'domcontentloaded', timeout: BROWSER_TIMEOUT });
+          await page.waitForTimeout(2000).catch(() => {});
         }
         screenshotBefore = await screenshot(page, 'before-read').catch(() => null);
+
+        let text = '';
+        // Try the model's selector first
         if (payload.selector) {
-          output = await page.locator(payload.selector).first().innerText({ timeout: BROWSER_TIMEOUT });
-        } else {
-          output = await page.evaluate(() => document.body.innerText);
+          try {
+            text = await page.locator(payload.selector).first().innerText({ timeout: 5000 });
+          } catch {}
         }
+        // Fallback: try Google-specific selectors for search results
+        if (!text) {
+          const googleSelectors = [
+            '#search',                    // Google search results container
+            '#rso',                       // Google results
+            '[data-sokoban-container]',   // Google results alt
+            'main',                       // Generic main content
+          ];
+          for (const sel of googleSelectors) {
+            try {
+              const el = page.locator(sel).first();
+              if (await el.count({ timeout: 2000 }) > 0) {
+                text = await el.innerText({ timeout: 5000 });
+                if (text.length > 50) break;
+              }
+            } catch {}
+          }
+        }
+        // Ultimate fallback: read the whole page
+        if (!text) {
+          text = await page.evaluate(() => document.body.innerText);
+        }
+        // Truncate to avoid huge payloads to the LLM
+        if (text.length > 4000) text = text.substring(0, 4000) + '\n...(truncated)';
+
         screenshotAfter = await screenshot(page, 'after-read').catch(() => null);
-        output = { text: output, url: page.url(), title: await page.title() };
+        output = { text, url: page.url(), title: await page.title() };
         break;
       }
 

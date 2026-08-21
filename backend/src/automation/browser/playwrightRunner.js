@@ -9,7 +9,7 @@ let context = null;
 
 async function getBrowser() {
   if (!browser) {
-    browser = await chromium.launch({ headless: true });
+    browser = await chromium.launch({ headless: false });
   }
   return browser;
 }
