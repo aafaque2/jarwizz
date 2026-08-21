@@ -34,7 +34,7 @@ function rejectStep(stepId) {
 /**
  * Execute a single step via the appropriate channel.
  */
-async function executeStep(step, sharedPages) {
+async function executeStep(step, sharedPages, conversationContext) {
   const channel = chooseChannel(step);
 
   if (channel === 'browser') {
@@ -67,6 +67,37 @@ async function executeStep(step, sharedPages) {
     }
   }
 
+  if (channel === 'llm') {
+    const p = step.payload || {};
+    const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
+    const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:3b';
+
+    // Build messages — include conversation context if available
+    const messages = [
+      { role: 'system', content: 'You are Jarwizz, a helpful voice assistant. Answer the user\'s question directly and concisely. Never output your reasoning or planning — just give the final answer. If the user asks "what is X", answer what X is. If they ask "tell me about X", give a brief summary. Be specific and factual. Max 2-3 sentences.' },
+    ];
+
+    // Inject conversation history if available
+    if (conversationContext) {
+      messages.push({ role: 'system', content: `Previous conversation:\n${conversationContext}` });
+    }
+
+    messages.push({ role: 'user', content: p.query || p.source || 'Hello' });
+
+    const response = await fetch(`${OLLAMA_URL}/api/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: OLLAMA_MODEL,
+        messages,
+        stream: false,
+      }),
+    });
+    const data = await response.json();
+    const text = data.message?.content || 'Sorry, I could not answer that.';
+    return { channel, output: { text }, screenshotBefore: null, screenshotAfter: null };
+  }
+
   // Desktop — future phases
   return { channel, output: { simulated: true }, screenshotBefore: null, screenshotAfter: null };
 }
@@ -74,7 +105,31 @@ async function executeStep(step, sharedPages) {
 async function runPlan(plan, broadcast) {
   resetStop();
 
-  const classified = classifyPlan(plan);
+  // Handle conversational replies (greetings, thanks, Q&A) — skip classification
+  if (plan._conversational) {
+    const taskId = randomUUID();
+    const reply = plan._reply || null;
+
+    // If reply is provided (exact greeting/thanks), emit it directly
+    if (reply) {
+      const result = {
+        step_id: plan.steps[0].step_id, step_index: 0,
+        ...plan.steps[0], status: 'completed', approval_status: 'auto',
+        output: { text: reply }, timestamp: new Date().toISOString(),
+      };
+      if (broadcast) broadcast('step_completed', result);
+      logAction({ task_id: taskId, ...result, result: 'success' });
+      return { task_id: taskId, results: [result], _reply: reply };
+    }
+
+    // For Q&A (what is X, etc.), let the model answer via answer_question handler
+    // Fall through to normal execution but skip classification (all read-only)
+    const steps = plan.steps.map((s, i) => ({ ...s, step_id: s.step_id || randomUUID(), tier: 'read-only' }));
+    plan.steps = steps;
+    plan._skipClassification = true;
+  }
+
+  const classified = plan._skipClassification ? plan : classifyPlan(plan);
   // Enforce domain whitelist on browser steps
   classified.steps = classified.steps.map(s => {
     const channel = chooseChannel(s);
@@ -133,7 +188,7 @@ async function runPlan(plan, broadcast) {
 
     // Execute the step
     try {
-      const execResult = await executeStep(step, sharedPages);
+      const execResult = await executeStep(step, sharedPages, classified._conversationContext || '');
       const stepResult = {
         step_id: step.step_id, step_index: i, ...step,
         status: 'completed',

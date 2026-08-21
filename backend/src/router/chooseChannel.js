@@ -10,9 +10,14 @@
 function chooseChannel(step) {
   const { action_type } = step;
 
-  // API channel — future phases
+  // API channel — Gmail, Calendar, etc.
   if (action_type.startsWith('gmail_') || action_type === 'api_call') {
     return 'api';
+  }
+
+  // LLM channel — direct model queries (answer, summarize)
+  if (action_type === 'answer_question' || action_type === 'summarize') {
+    return 'llm';
   }
 
   // Desktop channel — future phases

@@ -24,9 +24,72 @@ function getDb() {
         summary TEXT,
         timestamp TEXT DEFAULT (datetime('now'))
       );
+      CREATE TABLE IF NOT EXISTS chats (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL DEFAULT 'New Chat',
+        created_at TEXT DEFAULT (datetime('now')),
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE TABLE IF NOT EXISTS messages (
+        id TEXT PRIMARY KEY,
+        chat_id TEXT NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
+        content TEXT NOT NULL,
+        metadata TEXT,
+        created_at TEXT DEFAULT (datetime('now')),
+        FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
+      );
+      CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id, created_at);
     `);
   }
   return db;
+}
+
+// ── Chats ──
+
+function listChats() {
+  const d = getDb();
+  return d.prepare('SELECT * FROM chats ORDER BY updated_at DESC').all();
+}
+
+function createChat(title = 'New Chat') {
+  const d = getDb();
+  const id = randomUUID();
+  d.prepare('INSERT INTO chats (id, title) VALUES (?, ?)').run(id, title);
+  return d.prepare('SELECT * FROM chats WHERE id = ?').get(id);
+}
+
+function getChat(id) {
+  const d = getDb();
+  const chat = d.prepare('SELECT * FROM chats WHERE id = ?').get(id);
+  if (!chat) return null;
+  chat.messages = d.prepare('SELECT * FROM messages WHERE chat_id = ? ORDER BY created_at ASC').all(id);
+  return chat;
+}
+
+function renameChat(id, title) {
+  const d = getDb();
+  d.prepare('UPDATE chats SET title = ?, updated_at = datetime(\'now\') WHERE id = ?').run(title, id);
+  return d.prepare('SELECT * FROM chats WHERE id = ?').get(id);
+}
+
+function deleteChat(id) {
+  const d = getDb();
+  d.prepare('DELETE FROM messages WHERE chat_id = ?').run(id);
+  d.prepare('DELETE FROM chats WHERE id = ?').run(id);
+}
+
+function addMessage(chatId, role, content, metadata = null) {
+  const d = getDb();
+  const id = randomUUID();
+  d.prepare('INSERT INTO messages (id, chat_id, role, content, metadata) VALUES (?, ?, ?, ?, ?)').run(id, chatId, role, content, metadata ? JSON.stringify(metadata) : null);
+  d.prepare('UPDATE chats SET updated_at = datetime(\'now\') WHERE id = ?').run(chatId);
+  return d.prepare('SELECT * FROM messages WHERE id = ?').get(id);
+}
+
+function getRecentMessages(chatId, limit = 20) {
+  const d = getDb();
+  return d.prepare('SELECT * FROM messages WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?').all(chatId, limit).reverse();
 }
 
 // ── Embeddings via Ollama ──
@@ -149,4 +212,5 @@ function closeDb() {
 module.exports = {
   getDb, setPreference, getPreference, getAllPreferences, deletePreference,
   storeTaskHistory, recallRelevant, getRecentTasks, closeDb,
+  listChats, createChat, getChat, renameChat, deleteChat, addMessage, getRecentMessages,
 };
