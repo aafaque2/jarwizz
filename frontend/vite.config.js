@@ -6,7 +6,9 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
+      '/health': 'http://localhost:4000',
       '/command': 'http://localhost:4000',
+      '/chats': 'http://localhost:4000',
       '/stop': 'http://localhost:4000',
       '/approve': 'http://localhost:4000',
       '/reject': 'http://localhost:4000',

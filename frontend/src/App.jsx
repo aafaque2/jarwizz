@@ -1,19 +1,27 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import ListeningOrb from './components/ListeningOrb';
 import CommandBox from './components/CommandBox';
-import TaskQueue from './components/TaskQueue';
+import ChatView from './components/ChatView';
+import ChatSidebar from './components/ChatSidebar';
 import ApprovalModal from './components/ApprovalModal';
 import LogViewer from './components/LogViewer';
 
 const API = '';
-const WS_URL = `ws://${window.location.host}`;
+const WS_URL = `ws://${window.location.host}/ws`;
 
 export default function App() {
   const [orbState, setOrbState] = useState('idle');
-  const [tasks, setTasks] = useState([]);
   const [approval, setApproval] = useState(null);
   const [showLog, setShowLog] = useState(false);
+
+  // Chat state
+  const [activeChatId, setActiveChatId] = useState(null);
+  const [chatMessages, setChatMessages] = useState({});
+  const [currentTask, setCurrentTask] = useState(null);
+  const [chatRefreshKey, setChatRefreshKey] = useState(0);
+
   const wsRef = useRef(null);
+  const abortRef = useRef(null);
 
   // WebSocket connection
   useEffect(() => {
@@ -30,44 +38,97 @@ export default function App() {
         switch (event) {
           case 'plan_created':
             setOrbState('processing');
-            setTasks((prev) => [...prev, { task_id: data.plan?.steps?.[0]?.step_id, command: data.plan?._originalCommand || 'Task', steps: [] }]);
+            setCurrentTask(prev => {
+              // Dedupe: ignore if same task_id already set
+              const newId = data.plan?.task_id || data.plan?.steps?.[0]?.step_id;
+              if (prev && prev.task_id === newId) return prev;
+              return {
+                task_id: newId,
+                command: data.plan?._originalCommand || 'Task',
+                steps: [],
+                totalSteps: data.plan?.steps?.length || 0,
+                chat_id: data.chat_id,
+              };
+            });
             break;
+
+          case 'conversational_reply': {
+            setOrbState('response');
+            const chatId = data.chat_id;
+            if (chatId) {
+              setChatMessages(prev => {
+                const existing = prev[chatId] || [];
+                // Dedupe: don't add if last message has same content
+                if (existing.length > 0 && existing[existing.length - 1].content === data.text) return prev;
+                return {
+                  ...prev,
+                  [chatId]: [...existing, {
+                    id: `reply-${Date.now()}`,
+                    role: 'assistant',
+                    content: data.text,
+                    created_at: new Date().toISOString(),
+                  }],
+                };
+              });
+              setChatRefreshKey(k => k + 1);
+            }
+            setTimeout(() => setOrbState('idle'), 2000);
+            break;
+          }
 
           case 'step_completed':
             setOrbState('executing');
-            setTasks((prev) => {
-              const updated = [...prev];
-              const last = updated[updated.length - 1];
-              if (last) {
-                last.steps = [...(last.steps || []), data];
-              } else {
-                updated.push({ task_id: data.step_id, steps: [data] });
-              }
-              return updated;
+            setCurrentTask(prev => {
+              if (!prev) return prev;
+              const existing = prev.steps || [];
+              if (existing.some(s => s.step_id === data.step_id)) return prev;
+              return { ...prev, steps: [...existing, data] };
             });
             break;
 
           case 'step_error':
-            setTasks((prev) => {
-              const updated = [...prev];
-              const last = updated[updated.length - 1];
-              if (last) last.steps = [...(last.steps || []), data];
-              return updated;
+            setCurrentTask(prev => {
+              if (!prev) return prev;
+              const existing = prev.steps || [];
+              if (existing.some(s => s.step_id === data.step_id)) return prev;
+              return { ...prev, steps: [...existing, data] };
+            });
+            break;
+
+          case 'step_skipped':
+            setCurrentTask(prev => {
+              if (!prev) return prev;
+              const existing = prev.steps || [];
+              if (existing.some(s => s.step_id === data.step_id)) return prev;
+              return { ...prev, steps: [...existing, data] };
             });
             break;
 
           case 'pending_approval':
+            console.log('[APPROVAL] Received:', data);
+            // Dedupe: ignore if same step_id already pending
+            setApproval(prev => {
+              if (prev && prev.step_id === data.step_id) return prev;
+              return data;
+            });
             setOrbState('awaiting_approval');
-            setApproval(data);
+            break;
+
+          case 'step_approved':
+            setApproval(null);
+            setOrbState('executing');
             break;
 
           case 'step_rejected':
             setApproval(null);
             setOrbState('idle');
+            setCurrentTask(null);
             break;
 
           case 'stop':
             setOrbState('idle');
+            setApproval(null);
+            setCurrentTask(null);
             break;
         }
       };
@@ -84,41 +145,120 @@ export default function App() {
     return () => { clearTimeout(reconnect); wsRef.current?.close(); };
   }, []);
 
+  // Load chat messages when selecting a chat
+  const handleSelectChat = useCallback(async (chatId) => {
+    setActiveChatId(chatId);
+    setCurrentTask(null);
+    try {
+      const res = await fetch(`${API}/chats/${chatId}`);
+      const chat = await res.json();
+      setChatMessages(prev => ({ ...prev, [chatId]: chat.messages || [] }));
+    } catch (err) {
+      console.error('Failed to load chat:', err);
+    }
+  }, []);
+
+  // Create new chat
+  const handleNewChat = useCallback(async () => {
+    try {
+      const res = await fetch(`${API}/chats`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const chat = await res.json();
+      setActiveChatId(chat.id);
+      setChatMessages(prev => ({ ...prev, [chat.id]: [] }));
+      setChatRefreshKey(k => k + 1);
+    } catch (err) {
+      console.error('Failed to create chat:', err);
+    }
+  }, []);
+
+  // Send command in chat context
   const handleCommand = useCallback(async (text) => {
+    // If no active chat, create one first
+    let chatId = activeChatId;
+    if (!chatId) {
+      try {
+        const res = await fetch(`${API}/chats`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: text.length > 40 ? text.substring(0, 40) + '...' : text }),
+        });
+        const chat = await res.json();
+        chatId = chat.id;
+        setActiveChatId(chatId);
+        setChatMessages(prev => ({ ...prev, [chatId]: [] }));
+        setChatRefreshKey(k => k + 1);
+      } catch (err) {
+        console.error('Failed to create chat:', err);
+        return;
+      }
+    }
+
+    // Add user message to UI immediately
+    setChatMessages(prev => ({
+      ...prev,
+      [chatId]: [...(prev[chatId] || []), {
+        id: `user-${Date.now()}`,
+        role: 'user',
+        content: text,
+        created_at: new Date().toISOString(),
+      }],
+    }));
+
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     setOrbState('processing');
     try {
-      const res = await fetch(`${API}/command`, {
+      const res = await fetch(`${API}/chats/${chatId}/command`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ text }),
+        signal: controller.signal,
       });
       const result = await res.json();
 
-      // If no WS updates came (e.g. simple gmail command), add results directly
-      if (result.results?.length) {
-        setTasks((prev) => {
-          const updated = [...prev];
-          const last = updated[updated.length - 1];
-          if (last && last.steps.length === 0) {
-            last.steps = result.results;
-          } else {
-            updated.push({ task_id: result.task_id, command: text, steps: result.results });
-          }
-          return updated;
-        });
+      // Add assistant reply to chat
+      if (result.reply) {
+        setChatMessages(prev => ({
+          ...prev,
+          [chatId]: [...(prev[chatId] || []), {
+            id: `assistant-${Date.now()}`,
+            role: 'assistant',
+            content: result.reply,
+            created_at: new Date().toISOString(),
+          }],
+        }));
+        setChatRefreshKey(k => k + 1);
+        setOrbState('response');
+        setTimeout(() => setOrbState('idle'), 2000);
+        setCurrentTask(null);
+        return;
       }
 
-      // Check if approval is pending (irreversible step)
-      if (result.results?.some((r) => r.status === 'error')) {
+      if (result.results?.some((r) => r.status === 'pending_approval')) {
+        // Waiting for approval
+      } else if (result.results?.some((r) => r.status === 'error')) {
         setOrbState('idle');
+        setCurrentTask(null);
       } else {
-        setTimeout(() => setOrbState('idle'), 1500);
+        setTimeout(() => { setOrbState('idle'); setCurrentTask(null); }, 1500);
       }
     } catch (err) {
-      console.error('Command failed:', err);
+      if (err.name === 'AbortError') {
+        console.log('[CMD] Aborted by user');
+      } else {
+        console.error('Command failed:', err);
+      }
       setOrbState('idle');
+      setCurrentTask(null);
+    } finally {
+      abortRef.current = null;
     }
-  }, []);
+  }, [activeChatId]);
 
   const handleApprove = useCallback(async (stepId) => {
     await fetch(`${API}/approve/${stepId}`, { method: 'POST' });
@@ -130,16 +270,29 @@ export default function App() {
     await fetch(`${API}/reject/${stepId}`, { method: 'POST' });
     setApproval(null);
     setOrbState('idle');
+    setCurrentTask(null);
   }, []);
 
   const handleStop = useCallback(async () => {
+    if (abortRef.current) {
+      abortRef.current.abort();
+      abortRef.current = null;
+    }
     await fetch(`${API}/stop`, { method: 'POST' });
     setOrbState('idle');
     setApproval(null);
+    setCurrentTask(null);
   }, []);
 
+  // Build the active chat object with messages
+  const activeChat = activeChatId ? {
+    id: activeChatId,
+    messages: chatMessages[activeChatId] || [],
+  } : null;
+
   return (
-    <div className="h-screen flex flex-col bg-bg-void text-text-primary overflow-hidden">
+    <>
+    <div className="h-screen flex flex-col bg-bg-void text-text-primary">
       {/* Top bar */}
       <header className="flex items-center justify-between px-6 py-3 border-b border-border-subtle bg-bg-panel shrink-0">
         <ListeningOrb state={orbState} />
@@ -157,30 +310,27 @@ export default function App() {
       </header>
 
       {/* Main content */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left panel: Task Queue */}
-        <div className={`flex flex-col ${showLog ? 'w-1/2' : 'w-full'} border-r border-border-subtle transition-all duration-300`}>
-          <div className="px-4 py-2 border-b border-border-subtle flex items-center justify-between">
-            <span className="text-xs font-mono text-text-secondary uppercase tracking-wider">Task Queue</span>
-            <button
-              onClick={() => setShowLog(!showLog)}
-              className="text-xs text-text-secondary hover:text-green-primary transition-colors"
-            >
-              {showLog ? 'Hide Logs' : 'Show Logs'}
-            </button>
-          </div>
-          <div className="flex-1 overflow-hidden p-3">
-            <TaskQueue tasks={tasks} />
-          </div>
+      <div className="flex-1 flex min-h-0">
+        {/* Chat sidebar */}
+        <ChatSidebar
+          activeChatId={activeChatId}
+          onSelectChat={handleSelectChat}
+          onNewChat={handleNewChat}
+          refreshKey={chatRefreshKey}
+        />
+
+        {/* Chat view */}
+        <div className={`flex-1 flex flex-col min-h-0 ${showLog ? 'w-1/2' : ''}`}>
+          <ChatView chat={activeChat} currentTask={currentTask} />
         </div>
 
-        {/* Right panel: Log Viewer */}
+        {/* Log panel */}
         {showLog && (
-          <div className="w-1/2 flex flex-col">
-            <div className="px-4 py-2 border-b border-border-subtle">
+          <div className="w-1/2 flex flex-col min-h-0 border-l border-border-subtle">
+            <div className="px-4 py-2 border-b border-border-subtle shrink-0">
               <span className="text-xs font-mono text-text-secondary uppercase tracking-wider">Action Log</span>
             </div>
-            <div className="flex-1 overflow-hidden p-3">
+            <div className="flex-1 overflow-y-auto p-3 min-h-0">
               <LogViewer />
             </div>
           </div>
@@ -192,12 +342,13 @@ export default function App() {
         <CommandBox onCommand={handleCommand} />
       </footer>
 
-      {/* Approval Modal */}
+      {/* Approval Modal — rendered inside main div with fixed positioning */}
       <ApprovalModal
         approval={approval}
         onApprove={handleApprove}
         onReject={handleReject}
       />
     </div>
+    </>
   );
 }

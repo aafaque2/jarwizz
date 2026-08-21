@@ -29,3 +29,50 @@ body {
   color: var(--color-text-primary);
   font-family: 'Inter', 'Space Grotesk', system-ui, sans-serif;
 }
+
+/* Theme-matched scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #2a3d32 transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: #2a3d32;
+  border-radius: 3px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #3a5442;
+}
+
+/* Selection color */
+::selection {
+  background-color: rgba(51, 255, 164, 0.2);
+  color: #E8F5EE;
+}
+
+/* Focus ring override for accessibility */
+:focus-visible {
+  outline: 2px solid #33FFA4;
+  outline-offset: 2px;
+}
+
+/* Keyframes */
+@keyframes fadeIn {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
