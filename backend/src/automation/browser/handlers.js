@@ -59,6 +59,27 @@ async function smartClick(page, selectorStr, timeout) {
     if (await el.count() > 0) { await el.click({ timeout: CLICK_TIMEOUT }); return; }
   } catch {}
 
+  // 6. Last resort: if the selector looks like CSS the model guessed wrong,
+  // try any visible link containing meaningful text (e.g. "More information")
+  if (hasRealSelector) {
+    // Extract human words from a CSS-ish selector string
+    const words = selectorStr.replace(/[\[\]'"=a-zA-Z-]*href[^\]]*\]?/g, ' ')
+      .replace(/[^a-zA-Z\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length > 3 && !['href', 'class', 'name', 'type', 'input', 'button', 'link'].includes(w.toLowerCase()));
+    for (const word of words.slice(0, 3)) {
+      try {
+        const el = page.getByRole('link', { name: word }).first();
+        if (await el.count() > 0) { await el.click({ timeout: CLICK_TIMEOUT }); return; }
+      } catch {}
+    }
+    // Final fallback: first visible link with href that isn't nav/footer junk
+    try {
+      const el = page.locator('a[href]:visible').first();
+      if (await el.count() > 0) { await el.click({ timeout: CLICK_TIMEOUT }); return; }
+    } catch {}
+  }
+
   throw new Error(`Could not find clickable element matching "${selectorStr}"`);
 }
 
