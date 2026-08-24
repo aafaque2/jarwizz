@@ -1,7 +1,8 @@
 const { recallRelevant } = require('../memory/store');
 
-const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:7b';
+const LLAMACPP_URL = process.env.LLAMACPP_URL || 'http://127.0.0.1:8080';
+const LLAMACPP_MODEL = process.env.LLAMACPP_MODEL || 'qwen3-vl-4b';
+const MODEL_PATH = process.env.MODEL_PATH || 'C:\\models\\qwen3-vl-4b-q4_k_m.gguf';
 
 const SYSTEM_PROMPT = `You are Jarwizz, a voice-activated AI assistant. Given a user command, create a plan of discrete steps.
 
@@ -106,6 +107,35 @@ function buildGmailPlan(cmd) {
   return null;
 }
 
+async function callLlamaCpp(messages, extra = {}) {
+  const url = `${LLAMACPP_URL.replace(/\/$/, '')}/v1/chat/completions`;
+  const body = {
+    model: LLAMACPP_MODEL,
+    messages,
+    temperature: 0.2,
+    stream: false,
+    ...extra,
+  };
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(`llama.cpp API error: ${res.status} ${res.statusText} ${text.slice(0, 200)}`);
+  }
+  const data = await res.json();
+  // llama.cpp (OpenAI compat) -> choices[0].message.content
+  // Ollama compat fallback -> message.content or content
+  const content = data.choices?.[0]?.message?.content
+    || data.message?.content
+    || data.content
+    || '';
+  if (!content) throw new Error('Empty response from model runtime (llama.cpp + Qwen3-VL)');
+  return content;
+}
+
 async function generatePlan(commandText, memoryContext = '', conversationContext = '') {
   const lowerCmd = commandText.toLowerCase().trim();
   const { randomUUID } = require('crypto');
@@ -193,29 +223,7 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
     : `${systemContext}\nUser command: ${commandText}`;
   messages.push({ role: 'user', content: userMessage });
 
-  const response = await fetch(`${OLLAMA_URL}/api/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      model: OLLAMA_MODEL,
-      messages,
-      stream: false,
-      format: 'json',
-      keep_alive: '10m',
-      options: { temperature: 0.2 },
-    }),
-  });
-
-  if (!response.ok) {
-    throw new Error(`Ollama API error: ${response.status} ${response.statusText}`);
-  }
-
-  const data = await response.json();
-  const content = data.message?.content;
-
-  if (!content) {
-    throw new Error('Empty response from Ollama');
-  }
+  const content = await callLlamaCpp(messages, { temperature: 0.2 });
 
   let plan;
   try {
@@ -332,4 +340,29 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
   return plan;
 }
 
-module.exports = { generatePlan };
+/**
+ * Describe what's on a screenshot via the same model/runtime.
+ * Qwen3-VL handles vision natively — one model, one endpoint, no separate vision service.
+ * @param {Buffer} imageBuffer - PNG/JPEG bytes
+ * @param {string} prompt - e.g. "Describe what's visible in one sentence." or "Where is the Save button?"
+ * @returns {Promise<string>} description text
+ */
+async function describeScreen(imageBuffer, prompt = "Describe what's visible on this screen in one paragraph — list windows, buttons, and any text you can read.") {
+  if (!imageBuffer || !imageBuffer.length) throw new Error('describeScreen: empty imageBuffer');
+  const b64 = imageBuffer.toString('base64');
+  // Infer mime; default png — llama.cpp's OpenAI compat accepts data URL
+  const mime = b64.startsWith('/9j/') ? 'image/jpeg' : 'image/png';
+  const messages = [
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: prompt },
+        { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } },
+      ],
+    },
+  ];
+  const content = await callLlamaCpp(messages, { temperature: 0.2, max_tokens: 512 });
+  return content.trim();
+}
+
+module.exports = { generatePlan, describeScreen, LLAMACPP_URL, MODEL_PATH };
