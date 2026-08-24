@@ -137,15 +137,56 @@ await test('WebSocket connects and disconnects', async () => {
   ok('clean connect/disconnect');
 });
 
-await test('Ollama model accessible', async () => {
-  const { execSync } = require('child_process');
-  const result = execSync('"C:\\Users\\aafaq\\AppData\\Local\\Programs\\Ollama\\ollama.exe" list', { timeout: 10000 }).toString();
-  if (!result.includes('llama3.2:3b')) throw new Error('model not found');
-  ok('llama3.2:3b present');
+await test('llama.cpp + Qwen3-VL-4B model accessible (text + vision)', async () => {
+  const LLAMACPP_URL = process.env.LLAMACPP_URL || 'http://127.0.0.1:8080';
+  const url = new URL(LLAMACPP_URL);
+  function postLlama(path, data) {
+    return new Promise((resolve, reject) => {
+      const payload = JSON.stringify(data);
+      const req = http.request({
+        hostname: url.hostname,
+        port: url.port || 8080,
+        path,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+      }, (res) => {
+        let body = '';
+        res.on('data', c => body += c);
+        res.on('end', () => resolve({ status: res.statusCode, body }));
+      });
+      req.on('error', reject);
+      req.setTimeout(15000, () => reject(new Error('llama.cpp timeout')));
+      req.end(payload);
+    });
+  }
+  // text-only check
+  const textRes = await postLlama('/v1/chat/completions', {
+    model: 'qwen3-vl-4b',
+    messages: [{ role: 'user', content: 'Say hello in one sentence.' }],
+    temperature: 0.2,
+  });
+  if (textRes.status !== 200) throw new Error(`text check status ${textRes.status}: ${textRes.body.slice(0,150)}`);
+  const textData = JSON.parse(textRes.body);
+  const textContent = textData.choices?.[0]?.message?.content || textData.content || '';
+  if (!textContent) throw new Error('empty text response');
+  ok(`text: "${textContent.slice(0,60)}..."`);
+
+  // vision check — 1x1 PNG
+  const tinyPngB64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=';
+  const visionRes = await postLlama('/v1/chat/completions', {
+    model: 'qwen3-vl-4b',
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'Describe what is visible in this image in one sentence.' }, { type: 'image_url', image_url: { url: `data:image/png;base64,${tinyPngB64}` } }] }],
+    temperature: 0.2,
+  });
+  if (visionRes.status !== 200) throw new Error(`vision check status ${visionRes.status}: ${visionRes.body.slice(0,200)}`);
+  const visionData = JSON.parse(visionRes.body);
+  const visionContent = visionData.choices?.[0]?.message?.content || '';
+  if (!visionContent) throw new Error('empty vision response');
+  ok(`vision: "${visionContent.slice(0,60)}..."`);
 });
 
 // ═══════════════════════════════════════════════════════════
-// SECTION 2: GMAIL API ROUTING (fast — mock mode, bypasses Ollama)
+// SECTION 2: GMAIL API ROUTING (fast — mock mode, bypasses model runtime)
 // ═══════════════════════════════════════════════════════════
 console.log('\n=== SECTION 2: GMAIL API ROUTING ===');
 
@@ -239,7 +280,7 @@ await test('Kill switch stops execution', async () => {
 });
 
 // ═══════════════════════════════════════════════════════════
-// SECTION 4: BROWSER AUTOMATION (via /command — Ollama + Playwright)
+// SECTION 4: BROWSER AUTOMATION (via /command — llama.cpp + Qwen3-VL + Playwright)
 // ═══════════════════════════════════════════════════════════
 console.log('\n=== SECTION 4: BROWSER AUTOMATION ===');
 
