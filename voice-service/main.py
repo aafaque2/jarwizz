@@ -104,7 +104,16 @@ def get_whisper_model():
 def transcribe(audio_np):
     """Transcribe audio numpy array. Returns (text, confidence)."""
     model = get_whisper_model()
-    segments, info = model.transcribe(audio_np, language="en")
+    try:
+        segments, info = model.transcribe(
+            audio_np,
+            language="en",
+            condition_on_previous_text=False,  # prevents first-word repetition loops
+            vad_filter=True,                    # trims leading noise/silence artifacts
+            vad_parameters={"min_silence_duration_ms": 250},
+        )
+    except Exception:
+        segments, info = model.transcribe(audio_np, language="en")
     full_text = " ".join(s.text.strip() for s in segments)
     confidence = info.language_probability
     return full_text.strip(), confidence
@@ -132,6 +141,19 @@ def detect_wake_word(audio_queue, oww_model):
 
 
 # ── Record audio after wake ──
+
+def flush_stale_audio(audio_q, keep_chunks=4):
+    """Discard stale buffered chunks (wake-word tail) so commands aren't corrupted.
+    Keeps the last ~0.3s so the first word of the command isn't clipped."""
+    stale = []
+    while True:
+        try:
+            stale.append(audio_q.get_nowait())
+        except queue.Empty:
+            break
+    for chunk in stale[-keep_chunks:]:
+        audio_q.put(chunk)
+
 
 def record_command(audio_stream):
     """Record until silence or max duration. Returns numpy array."""
@@ -199,20 +221,85 @@ def approve_step(step_id):
     req = urllib.request.Request(f"{BACKEND_URL}/approve/{step_id}", method="POST")
     try:
         urllib.request.urlopen(req, timeout=5)
+        return True
     except Exception:
-        pass
-
-
-# ── Stop phrase listener (always-armed) ──
-
-def check_stop_phrase(audio_np):
-    """Quick STT check for stop phrases in audio."""
-    if len(audio_np) < SAMPLE_RATE:  # less than 1 second
         return False
-    text, conf = transcribe(audio_np)
+
+
+def reject_step(step_id):
+    """POST reject to backend."""
+    import urllib.request
+    req = urllib.request.Request(f"{BACKEND_URL}/reject/{step_id}", method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=5)
+        return True
+    except Exception:
+        return False
+
+
+# ── Voice approval (yes / no) while a plan is paused for confirmation ──
+
+YES_WORDS = {"yes", "yeah", "yep", "yup", "sure", "confirm", "approved", "approve", "go", "ahead", "ok", "okay", "do", "continue"}
+NO_WORDS = {"no", "nope", "nah", "reject", "rejected", "cancel", "stop", "deny", "don't", "dont"}
+
+_approval_lock = threading.Lock()
+_tts_finished = threading.Event()  # set when the approval prompt finished playing
+
+
+def listen_for_approval(step_id, max_attempts=4):
+    """Record short clips and answer a pending approval by voice.
+    Runs in its own thread with a one-shot recording (not the shared queue,
+    which belongs to the wake-word loop)."""
+    if not step_id or not _approval_lock.acquire(blocking=False):
+        return
+
+    print(f"  [APPROVAL] Listening for yes/no (step {step_id[:8]})...")
+    try:
+        # Don't record our own TTS prompt — wait until it finished playing
+        _tts_finished.wait(timeout=15)
+        time.sleep(0.4)
+
+        for attempt in range(max_attempts):
+            recording = sd.rec(int(2.5 * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1, dtype="float32")
+            sd.wait()
+            audio_np = recording.flatten().astype(np.float32)
+
+            if np.max(np.abs(audio_np)) < SILENCE_THRESHOLD:
+                continue
+
+            text, _conf = transcribe(audio_np)
+            lower = text.lower().strip()
+            print(f"  [APPROVAL STT] '{lower}'")
+            if not lower:
+                continue
+
+            words = set(lower.replace(",", "").replace(".", "").split())
+            said_yes = bool(words & YES_WORDS) and not (words & NO_WORDS)
+            said_no = bool(words & NO_WORDS)
+
+            if said_yes:
+                print("  [APPROVAL] -> approved")
+                speak("Approved.")
+                approve_step(step_id)
+                return
+            if said_no:
+                print("  [APPROVAL] -> rejected")
+                speak("Rejected.")
+                reject_step(step_id)
+                return
+    finally:
+        _approval_lock.release()
+
+
+# ── Stop phrase handling ──
+
+STOP_PHRASES = ["jarwizz stop", "stop", "halt", "cancel", "never mind", "nevermind"]
+
+
+def is_stop_phrase(text):
+    """Check already-transcribed text for stop phrases (no extra STT pass)."""
     lower = text.lower().strip()
-    stop_phrases = ["jarwizz stop", "stop", "halt", "cancel", "never mind", "nevermind"]
-    return any(phrase in lower for phrase in stop_phrases)
+    return any(phrase in lower for phrase in STOP_PHRASES)
 
 
 # ── Low-confidence handling ──
@@ -232,7 +319,9 @@ def ws_listener():
     """Connect to backend WebSocket and react to events."""
     while True:
         try:
-            ws = websocket.create_connection(BACKEND_WS, timeout=30)
+            # No recv timeout — blocking receive avoids reconnect churn that
+            # could drop pending_approval events
+            ws = websocket.create_connection(BACKEND_WS)
             print(f"  [WS] Connected to {BACKEND_WS}")
 
             while True:
@@ -244,7 +333,13 @@ def ws_listener():
                 if event == "pending_approval":
                     set_state(STATE_AWAITING_APPROVAL)
                     desc = data.get("description", "an action")
+                    step_id = data.get("step_id", "")
+                    _tts_finished.clear()
                     speak(f"I need your approval to {desc}. Say yes to proceed, or no to cancel.")
+                    _tts_finished.set()
+                    threading.Thread(
+                        target=listen_for_approval, args=(step_id,), daemon=True
+                    ).start()
 
                 elif event == "step_completed":
                     set_state(STATE_EXECUTING)
@@ -328,6 +423,9 @@ def main():
             except Exception:
                 pass
 
+            # Discard buffered wake-word tail so it doesn't corrupt the command
+            flush_stale_audio(audio_q)
+
             # Record command
             audio_np = record_command(audio_q)
 
@@ -335,20 +433,21 @@ def main():
                 print("  [VOICE] Too short, ignoring.")
                 continue
 
-            # Check for stop phrase
-            if args.test_stop or check_stop_phrase(audio_np):
-                print("  [VOICE] Stop phrase detected!")
-                send_stop()
-                speak("Stopped.")
-                continue
-
-            # Transcribe
+            # Transcribe ONCE — reused for stop-phrase check AND the command
+            # (previously every clip was transcribed twice, a big slowdown)
             set_state(STATE_PROCESSING)
             text, conf = transcribe(audio_np)
             print(f"  [STT] '{text}' (confidence: {conf:.2f})")
 
             if not text:
                 speak("I didn't hear anything. Try again.")
+                continue
+
+            # Check for stop phrase using the same transcript
+            if args.test_stop or is_stop_phrase(text):
+                print("  [VOICE] Stop phrase detected!")
+                send_stop()
+                speak("Stopped.")
                 continue
 
             if conf < LOW_CONFIDENCE_THRESHOLD:
