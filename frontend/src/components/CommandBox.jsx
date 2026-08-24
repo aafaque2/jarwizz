@@ -7,6 +7,9 @@ export default function CommandBox({ onCommand }) {
   const [speechSupported, setSpeechSupported] = useState(false);
   const recognitionRef = useRef(null);
   const inputRef = useRef(null);
+  // Committed text (typed + finalized speech). Interim results are shown
+  // on top of this but never committed — fixes "hellohello" duplication.
+  const baseTextRef = useRef('');
 
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -28,10 +31,11 @@ export default function CommandBox({ onCommand }) {
           }
         }
         if (finalTranscript) {
-          setText(prev => prev + finalTranscript);
+          baseTextRef.current = `${baseTextRef.current}${finalTranscript}`.replace(/\s+/g, ' ');
+          setText(baseTextRef.current);
         } else if (interimTranscript) {
-          // Show interim results as placeholder-style feedback
-          setText(prev => prev || interimTranscript);
+          // Preview only — do not write into baseTextRef
+          setText(`${baseTextRef.current}${interimTranscript}`);
         }
       };
 
@@ -55,8 +59,9 @@ export default function CommandBox({ onCommand }) {
       recognitionRef.current.stop();
       setListening(false);
     } else {
+      baseTextRef.current = inputRef.current?.value ?? '';
       setListening(true);
-      recognitionRef.current.start();
+      try { recognitionRef.current.start(); } catch {}
     }
   }, [listening]);
 
@@ -66,6 +71,7 @@ export default function CommandBox({ onCommand }) {
     if (!cmd || sending) return;
     setSending(true);
     setText('');
+    baseTextRef.current = '';
     if (listening && recognitionRef.current) {
       recognitionRef.current.stop();
       setListening(false);
@@ -115,7 +121,7 @@ export default function CommandBox({ onCommand }) {
             ref={inputRef}
             type="text"
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => { setText(e.target.value); baseTextRef.current = e.target.value; }}
             onKeyDown={handleKeyDown}
             placeholder={listening ? 'Listening...' : 'Type a command or press mic to speak...'}
             disabled={sending}

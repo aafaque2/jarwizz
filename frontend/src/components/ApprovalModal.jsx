@@ -7,6 +7,11 @@ export default function ApprovalModal({ approval, onApprove, onReject }) {
   const [speechSupported, setSpeechSupported] = useState(false);
   const recognitionRef = useRef(null);
   const timeoutRef = useRef(null);
+  // Refs so recognition callbacks never read stale render values
+  const approvalRef = useRef(null);
+  const decidingRef = useRef(false);
+  const armedAtRef = useRef(0);
+  const decidingCooldownRef = useRef(0);
 
   useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -39,25 +44,33 @@ export default function ApprovalModal({ approval, onApprove, onReject }) {
 
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
-    recognition.interimResults = true;
+    recognition.interimResults = false;
     recognition.lang = 'en-US';
 
+    armedAtRef.current = Date.now();
+
     recognition.onresult = (event) => {
+      // Only act on FINAL results — interim guesses caused false yes/no matches
       let finalText = '';
-      let interimText = '';
       for (let i = event.resultIndex; i < event.results.length; i++) {
-        const t = event.results[i][0].transcript.toLowerCase().trim();
         if (event.results[i].isFinal) {
-          finalText += t;
-        } else {
-          interimText += t;
+          finalText += event.results[i][0].transcript.toLowerCase().trim();
         }
       }
+      const combined = finalText.trim();
+      if (!combined) return;
 
-      const combined = (finalText || interimText);
       setTranscript(combined);
 
-      // Check for yes/no keywords
+      // Echo guard: ignore audio heard right after the modal opens — that's
+      // usually our own TTS prompt ("...say yes to proceed or no to cancel")
+      // being picked up by the mic, which instantly rejected/approved steps.
+      if (Date.now() - armedAtRef.current < 2000) return;
+      // Only treat SHORT utterances as commands; a sentence that merely
+      // contains "no" must not decide the approval.
+      if (combined.split(/\s+/).length > 6) return;
+      if (Date.now() < decidingCooldownRef.current) return;
+
       if (combined.match(/\b(yes|yeah|yep|confirm|approve|go ahead|do it|accept)\b/)) {
         handleApprove();
       } else if (combined.match(/\b(no|nope|nah|reject|cancel|stop|deny)\b/)) {
@@ -68,9 +81,9 @@ export default function ApprovalModal({ approval, onApprove, onReject }) {
     recognition.onend = () => {
       setListening(false);
       // Restart if still awaiting approval and not deciding
-      if (approval && !deciding) {
+      if (approvalRef.current && !decidingRef.current) {
         setTimeout(() => {
-          if (approval && !deciding) startListening();
+          if (approvalRef.current && !decidingRef.current) startListening();
         }, 500);
       }
     };
@@ -86,10 +99,12 @@ export default function ApprovalModal({ approval, onApprove, onReject }) {
     setListening(true);
     setTranscript('');
     try { recognition.start(); } catch {}
-  }, [approval, deciding]);
+  }, []);
 
   const handleApprove = useCallback(async () => {
-    if (deciding) return;
+    if (decidingRef.current || !approvalRef.current) return;
+    decidingRef.current = true;
+    decidingCooldownRef.current = Date.now() + 1500;
     setDeciding(true);
     setListening(false);
     if (recognitionRef.current) {
@@ -99,12 +114,15 @@ export default function ApprovalModal({ approval, onApprove, onReject }) {
     try {
       await onApprove(approval.step_id);
     } finally {
+      decidingRef.current = false;
       setDeciding(false);
     }
-  }, [approval, onApprove, deciding]);
+  }, [approval, onApprove]);
 
   const handleReject = useCallback(async () => {
-    if (deciding) return;
+    if (decidingRef.current || !approvalRef.current) return;
+    decidingRef.current = true;
+    decidingCooldownRef.current = Date.now() + 1500;
     setDeciding(true);
     setListening(false);
     if (recognitionRef.current) {
@@ -114,9 +132,15 @@ export default function ApprovalModal({ approval, onApprove, onReject }) {
     try {
       await onReject(approval.step_id);
     } finally {
+      decidingRef.current = false;
       setDeciding(false);
     }
-  }, [approval, onReject, deciding]);
+  }, [approval, onReject]);
+
+  // Keep a ref in sync so recognition callbacks see the current approval
+  useEffect(() => {
+    approvalRef.current = approval;
+  }, [approval]);
 
   if (!approval) return null;
 

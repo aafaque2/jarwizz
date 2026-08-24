@@ -23,6 +23,31 @@ export default function App() {
   const wsRef = useRef(null);
   const abortRef = useRef(null);
 
+  // Append an assistant message, deduping against recent assistant bubbles.
+  // The reply arrives via BOTH the WS event and the HTTP response — without
+  // this it renders twice. Time-boxed so identical consecutive answers
+  // (e.g. asking the same question twice) still show up.
+  const pushAssistantMessage = useCallback((chatId, content) => {
+    setChatMessages(prev => {
+      const existing = prev[chatId] || [];
+      const now = Date.now();
+      for (let i = existing.length - 1; i >= 0 && existing[i].role === 'assistant'; i--) {
+        const age = now - new Date(existing[i].created_at).getTime();
+        if (age < 10000 && existing[i].content === content) return prev;
+      }
+      return {
+        ...prev,
+        [chatId]: [...existing, {
+          id: `reply-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          role: 'assistant',
+          content,
+          created_at: new Date().toISOString(),
+        }],
+      };
+    });
+    setChatRefreshKey(k => k + 1);
+  }, []);
+
   // WebSocket connection
   useEffect(() => {
     let reconnect;
@@ -56,21 +81,7 @@ export default function App() {
             setOrbState('response');
             const chatId = data.chat_id;
             if (chatId) {
-              setChatMessages(prev => {
-                const existing = prev[chatId] || [];
-                // Dedupe: don't add if last message has same content
-                if (existing.length > 0 && existing[existing.length - 1].content === data.text) return prev;
-                return {
-                  ...prev,
-                  [chatId]: [...existing, {
-                    id: `reply-${Date.now()}`,
-                    role: 'assistant',
-                    content: data.text,
-                    created_at: new Date().toISOString(),
-                  }],
-                };
-              });
-              setChatRefreshKey(k => k + 1);
+              pushAssistantMessage(chatId, data.text);
             }
             setTimeout(() => setOrbState('idle'), 2000);
             break;
@@ -121,13 +132,19 @@ export default function App() {
 
           case 'step_rejected':
             setApproval(null);
-            setOrbState('idle');
-            setCurrentTask(null);
+            // Plan continues to the next step — keep live task visible;
+            // 'plan_finished' clears it when the run ends
+            setOrbState('executing');
             break;
 
           case 'stop':
             setOrbState('idle');
             setApproval(null);
+            setCurrentTask(null);
+            break;
+
+          case 'plan_finished':
+            setOrbState('idle');
             setCurrentTask(null);
             break;
         }
@@ -143,7 +160,7 @@ export default function App() {
 
     connect();
     return () => { clearTimeout(reconnect); wsRef.current?.close(); };
-  }, []);
+  }, [pushAssistantMessage]);
 
   // Load chat messages when selecting a chat
   const handleSelectChat = useCallback(async (chatId) => {
@@ -221,18 +238,9 @@ export default function App() {
       });
       const result = await res.json();
 
-      // Add assistant reply to chat
+      // Add assistant reply to chat (deduped — WS already delivered it)
       if (result.reply) {
-        setChatMessages(prev => ({
-          ...prev,
-          [chatId]: [...(prev[chatId] || []), {
-            id: `assistant-${Date.now()}`,
-            role: 'assistant',
-            content: result.reply,
-            created_at: new Date().toISOString(),
-          }],
-        }));
-        setChatRefreshKey(k => k + 1);
+        pushAssistantMessage(chatId, result.reply);
         setOrbState('response');
         setTimeout(() => setOrbState('idle'), 2000);
         setCurrentTask(null);
@@ -258,7 +266,7 @@ export default function App() {
     } finally {
       abortRef.current = null;
     }
-  }, [activeChatId]);
+  }, [activeChatId, pushAssistantMessage]);
 
   const handleApprove = useCallback(async (stepId) => {
     await fetch(`${API}/approve/${stepId}`, { method: 'POST' });
@@ -269,8 +277,7 @@ export default function App() {
   const handleReject = useCallback(async (stepId) => {
     await fetch(`${API}/reject/${stepId}`, { method: 'POST' });
     setApproval(null);
-    setOrbState('idle');
-    setCurrentTask(null);
+    setOrbState('executing');
   }, []);
 
   const handleStop = useCallback(async () => {
