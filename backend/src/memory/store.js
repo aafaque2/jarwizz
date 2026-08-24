@@ -140,14 +140,18 @@ async function storeTaskHistory(command, results) {
   // Store in SQLite
   d.prepare('INSERT INTO task_history (task_id, command, summary) VALUES (?, ?, ?)').run(taskId, command, summary);
 
-  // Store embedding for semantic search
-  try {
-    const embedding = await getEmbedding(command + ' ' + summary);
-    const embeddingPath = path.join(__dirname, '..', '..', 'memory-embeddings.jsonl');
-    const fs = require('fs');
-    fs.appendFileSync(embeddingPath, JSON.stringify({ task_id: taskId, text: command, summary, embedding }) + '\n');
-  } catch (err) {
-    console.warn('[MEMORY] Embedding store failed:', err.message);
+  // Store embedding for semantic search.
+  // Opt-in: embedding after every task reloads the embed model and evicts the
+  // main LLM — a major source of slowness. Set JARWIZZ_SEMANTIC_MEMORY=1 to enable.
+  if (process.env.JARWIZZ_SEMANTIC_MEMORY === '1') {
+    try {
+      const embedding = await getEmbedding(command + ' ' + summary);
+      const embeddingPath = path.join(__dirname, '..', '..', 'memory-embeddings.jsonl');
+      const fs = require('fs');
+      fs.appendFileSync(embeddingPath, JSON.stringify({ task_id: taskId, text: command, summary, embedding }) + '\n');
+    } catch (err) {
+      console.warn('[MEMORY] Embedding store failed:', err.message);
+    }
   }
 
   return taskId;

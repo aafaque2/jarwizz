@@ -160,22 +160,19 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
 
   // 4. Everything else goes to the model — no more intercepts
   let memoryContextStr = memoryContext || '';
-  try {
-    const recalled = await recallRelevant(commandText, 3);
-    const parts = [];
-    if (recalled.preferences) parts.push(`User preferences:\n${recalled.preferences}`);
-    if (recalled.memories.length > 0) {
-      parts.push(`Relevant past tasks:\n${recalled.memories.map(m => `- ${m.text} → ${m.summary}`).join('\n')}`);
-    }
-    if (parts.length) memoryContextStr = parts.join('\n\n');
-
-    // Unload embed model from VRAM so the 7B model gets full GPU
-    fetch(`${OLLAMA_URL}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model: 'nomic-embed-text', keep_alive: 0 }),
-    }).catch(() => {});
-  } catch {}
+  // Semantic recall requires an embedding round-trip per command; it evicts the
+  // main LLM from VRAM/keeps it cold and adds seconds of latency. Opt-in only.
+  if (process.env.JARWIZZ_SEMANTIC_MEMORY === '1') {
+    try {
+      const recalled = await recallRelevant(commandText, 3);
+      const parts = [];
+      if (recalled.preferences) parts.push(`User preferences:\n${recalled.preferences}`);
+      if (recalled.memories.length > 0) {
+        parts.push(`Relevant past tasks:\n${recalled.memories.map(m => `- ${m.text} → ${m.summary}`).join('\n')}`);
+      }
+      if (parts.length) memoryContextStr = parts.join('\n\n');
+    } catch {}
+  }
 
   const now = new Date();
   const systemContext = `Current date/time: ${now.toISOString()} (${now.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}, ${now.toLocaleTimeString('en-US')}).`;
@@ -183,9 +180,12 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
   // Build messages array with conversation history
   const messages = [{ role: 'system', content: SYSTEM_PROMPT }];
 
-  // Inject conversation history if available
+  // Inject conversation history if available (trimmed — huge contexts slow the local model)
   if (conversationContext) {
-    messages.push({ role: 'system', content: `Previous conversation:\n${conversationContext}` });
+    const trimmed = conversationContext.length > 1500
+      ? '...\n' + conversationContext.slice(-1500)
+      : conversationContext;
+    messages.push({ role: 'system', content: `Previous conversation:\n${trimmed}` });
   }
 
   const userMessage = memoryContextStr
@@ -201,6 +201,8 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
       messages,
       stream: false,
       format: 'json',
+      keep_alive: '10m',
+      options: { temperature: 0.2 },
     }),
   });
 
@@ -245,6 +247,10 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
     throw new Error(`Model output missing 'steps' array: ${content}`);
   }
 
+  // Drop malformed entries (model sometimes returns strings/null instead of objects)
+  // — these previously crashed downstream code reading properties off undefined
+  plan.steps = plan.steps.filter(s => s && typeof s === 'object' && !Array.isArray(s));
+
   // Post-process: validate and fix steps
   const validTiers = ['read-only', 'reversible', 'irreversible'];
   const validActionTypes = [
@@ -256,12 +262,24 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
   for (const step of plan.steps) {
     if (!step.description) step.description = 'Unnamed step';
     if (!step.action_type) step.action_type = 'unknown';
-    if (!step.payload) step.payload = {};
+    if (!step.payload || typeof step.payload !== 'object') step.payload = {};
     if (!validTiers.includes(step.tier)) step.tier = 'irreversible';
     if (!validActionTypes.includes(step.action_type)) {
       step.action_type = 'answer_question';
       step.payload = { source: 'llm', query: step.description };
       step.tier = 'read-only';
+    }
+    // Repair selectors mangled by JSON quoting issues (e.g. "ytd-video-renderer[truncated=")
+    for (const key of ['selector', 'target']) {
+      const sel = step.payload[key];
+      if (typeof sel === 'string') {
+        let cleaned = sel.trim().replace(/['"]+$/, '');
+        const open = (cleaned.match(/\[/g) || []).length;
+        const close = (cleaned.match(/\]/g) || []).length;
+        if (open !== close) cleaned = cleaned.substring(0, cleaned.indexOf('['));
+        if (!cleaned.trim()) delete step.payload[key];
+        else step.payload[key] = cleaned;
+      }
     }
   }
 
