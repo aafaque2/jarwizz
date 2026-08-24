@@ -27,7 +27,7 @@ async function test() {
   const health = await (await fetch(`${BASE}/health`)).json();
   console.log(`Gmail mode: ${health.gmail}`);
 
-  const ws = new WebSocket('ws://localhost:4000');
+  const ws = new WebSocket('ws://localhost:4000/ws');
   await new Promise(r => ws.on('open', r));
   console.log('WebSocket connected.\n');
 
