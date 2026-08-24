@@ -5,7 +5,7 @@ const path = require('path');
 const { WebSocketServer } = require('ws');
 require('dotenv').config();
 
-const { generatePlan } = require('./model/ollamaClient');
+const { generatePlan } = require('./model/llamacppClient');
 const { requestStop, runPlan, approveStep, rejectStep, cancelPendingApprovals, shutdown } = require('./orchestrator/taskRunner');
 const { readLogs } = require('./guardrails/logger');
 const { isWhitelisted, addToWhitelist, loadWhitelist } = require('./guardrails/whitelist');

@@ -83,8 +83,8 @@ async function executeStep(step, sharedPages, conversationContext) {
 
   if (channel === 'llm') {
     const p = step.payload || {};
-    const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
-    const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'qwen2.5:3b';
+    const LLAMACPP_URL = process.env.LLAMACPP_URL || 'http://127.0.0.1:8080';
+    const LLAMACPP_MODEL = process.env.LLAMACPP_MODEL || 'qwen3-vl-4b';
 
     // Build messages — include conversation context if available
     const messages = [
@@ -101,18 +101,18 @@ async function executeStep(step, sharedPages, conversationContext) {
 
     messages.push({ role: 'user', content: p.query || p.source || 'Hello' });
 
-    const response = await fetch(`${OLLAMA_URL}/api/chat`, {
+    const response = await fetch(`${LLAMACPP_URL.replace(/\/$/, '')}/v1/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: OLLAMA_MODEL,
+        model: LLAMACPP_MODEL,
         messages,
         stream: false,
-        keep_alive: '10m',
+        temperature: 0.2,
       }),
     });
     const data = await response.json();
-    const text = data.message?.content || 'Sorry, I could not answer that.';
+    const text = data.choices?.[0]?.message?.content || data.message?.content || 'Sorry, I could not answer that.';
     return { channel, output: { text }, screenshotBefore: null, screenshotAfter: null };
   }
 

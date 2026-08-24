@@ -3,7 +3,10 @@ const path = require('path');
 const { randomUUID } = require('crypto');
 
 const DB_PATH = path.join(__dirname, '..', '..', 'memory.db');
-const OLLAMA_URL = process.env.OLLAMA_URL || 'http://localhost:11434';
+// Embeddings are opt-in and separate from the main LLM (llama.cpp + Qwen3-VL).
+// Uses an embedding sidecar if configured; defaults to localhost:11434 for
+// backwards compat with older Ollama-based setups, but main planning runs on LLAMACPP_URL.
+const EMBED_URL = process.env.EMBED_URL || process.env.OLLAMA_URL || 'http://localhost:11434';
 const EMBED_MODEL = 'nomic-embed-text';
 
 let db;
@@ -92,10 +95,10 @@ function getRecentMessages(chatId, limit = 20) {
   return d.prepare('SELECT * FROM messages WHERE chat_id = ? ORDER BY created_at DESC LIMIT ?').all(chatId, limit).reverse();
 }
 
-// ── Embeddings via Ollama ──
+// ── Embeddings (opt-in sidecar, not the main vision LLM) ──
 
 async function getEmbedding(text) {
-  const res = await fetch(`${OLLAMA_URL}/api/embed`, {
+  const res = await fetch(`${EMBED_URL}/api/embed`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: EMBED_MODEL, input: text }),
