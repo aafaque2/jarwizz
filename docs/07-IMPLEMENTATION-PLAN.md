@@ -16,7 +16,23 @@ passes. Read `02-ARCHITECTURE.md`, `04-UI-DESIGN-SYSTEM.md`, and
 3. Initialize git, commit the empty skeleton.
 4. Create a root `README.md` linking to `docs/00-README.md`.
 
-**Checkpoint**: all 7 independent tests in `06-SETUP-GUIDE.md` §7 pass.
+**Checkpoint**: all 7 independent tests in `06-SETUP-GUIDE.md` §7 pass (including the Vulkan offload + text+vision smoke tests in §1c).
+
+---
+
+## Phase 0.5 — Hardware & Model Validation (one-time, lightweight)
+
+**Goal**: prove the chosen local runtime actually works on this hardware before building product code on top of it. This is **not** an exhaustive multi-model, multi-runtime benchmark — just a single pass/fail sanity check on the one stack you've committed to: llama.cpp (Vulkan backend) + Qwen3-VL-4B GGUF Q4_K_M.
+
+**Why this phase exists:** the RX 5500M has no official ROCm support, and GGUF quantization / Vulkan offload can silently fall back to CPU-only. If the runtime is unvalidated, every later phase will appear to "work" but be unusably slow or functionally broken for vision. Validate once, then build.
+
+1. **Confirm Vulkan GPU detection.** Start `llama-server` with `--vulkan --gpu-layers 99` as described in `06-SETUP-GUIDE.md` §1c. Inspect the startup log: it must enumerate the GPU (AMD RX 5500M / gfx1012) and report layers offloaded to Vulkan. If it reports `0 layers` or only `cpu`, the build is CPU-only — rebuild with `-DGGML_VULKAN=1` or obtain a known Vulkan-enabled binary. Optionally observe GPU utilization (Task Manager → GPU, or `radeontop`) spiking during generation to double-confirm offload is live. This is not a benchmark; it's a yes/no gate.
+2. **Load Qwen3-VL-4B Q4_K_M.** Point the server at the GGUF file at `MODEL_PATH` / `LLAMACPP_URL`. Confirm the server loads without OOM and advertises a vision-capable context (no error about missing mmproj / unsupported image content — Qwen3-VL GGUFs bundle vision; a text-only Qwen3 GGUF will fail the next step).
+3. **Text-only planning-style prompt.** Via `curl` to `LLAMACPP_URL/v1/chat/completions` (or via the thin client you will later wrap), send a representative planning prompt, e.g.: `You are a task planner. Given the command "draft a reply to the last email from Raj saying I'll be there at 5pm," return a JSON plan: { steps: [{ description, action_type, payload, tier }] }`. Record wall-clock latency from request to first token and to completion. The model should return well-formed JSON with tier classifications.
+4. **Screenshot-description (vision) prompt.** Take any screenshot (or use a sample image) and send a single image+prompt request through the **same** server/model, e.g. `Describe what's visible on this screen in one paragraph — list windows, buttons, and any text you can read.` Record latency for this call as well. Confirm the response is actually describing the image (not hallucinating a generic answer that ignores the image). This proves the vision path is wired correctly via the single `describeScreen()` interface.
+5. **Record both latencies** (text-only and vision) in a short note (e.g. `docs/phase-0.5-validation.md` or the Phase 0 commit message). No fixed millisecond threshold is prescribed — this is a **judgment call**: does the delay feel tolerable for an interactive voice assistant where you'd be waiting for a plan or screen description mid-task? A few seconds is likely fine; tens of seconds or minutes is not.
+
+**Checkpoint:** both calls complete successfully with latency low enough to feel usable in an interactive voice loop (threshold is a judgment call, not a fixed number — note what you observed and whether you'd tolerate it day-to-day). **If this checkpoint fails —** e.g. Vulkan not active, vision call errors, or latency is clearly unusable — **stop and reassess model/quantization choice before continuing** (try a smaller quantization, a different GGUF build, or revisit hardware). **Do not proceed to Phase 1 on an unvalidated runtime.** A failed validation is not a reason to add an exhaustive bake-off; pick one alternative, re-run this phase once, and decide.
 
 ---
 
@@ -24,7 +40,7 @@ passes. Read `02-ARCHITECTURE.md`, `04-UI-DESIGN-SYSTEM.md`, and
 
 **Goal**: text command → plan → simulated step list, displayed in terminal. No browser/desktop/API actions actually execute yet.
 
-1. `backend/src/model/ollamaClient.js` — function `generatePlan(commandText, memoryContext)` that calls Ollama with a system prompt instructing it to return a JSON plan: `{ steps: [{ description, action_type, payload, tier }] }`.
+1. `backend/src/model/llamacppClient.js` — function `generatePlan(commandText, memoryContext)` that calls the **llama.cpp server** (via `LLAMACPP_URL` / `MODEL_PATH`) with a system prompt instructing it to return a JSON plan: `{ steps: [{ description, action_type, payload, tier }] }`. The **same client module** must also expose `describeScreen(imageBuffer, prompt)` — a thin wrapper that sends an image+prompt (vision) request to the same server/model (Qwen3-VL handles both natively). Build both functions now; `generatePlan` is used starting this phase, `describeScreen` is exercised starting Phase 9 (and optionally for ambiguous read-screen cases earlier) — do not build a separate vision client or a second model integration.
 2. Write the planning system prompt carefully — it must always classify each step's `tier` as one of `read-only | reversible | irreversible` per `05-SAFETY-AND-GUARDRAILS.md` §1. Default to `irreversible` when unsure.
 3. `backend/src/orchestrator/taskRunner.js` — takes a plan, iterates steps, and for now just logs each step to console with its tier (no execution).
 4. `backend/src/server.js` — Express app with a `POST /command` endpoint: accepts `{ text }`, calls `generatePlan`, returns the plan JSON.
@@ -106,6 +122,8 @@ passes. Read `02-ARCHITECTURE.md`, `04-UI-DESIGN-SYSTEM.md`, and
 
 **Checkpoint**: full voice round trip works reliably across 10 varied spoken commands in a normal room (not silent), including at least one irreversible-tier command requiring spoken "yes" to proceed, and one live "stop" interrupting an in-progress task.
 
+_No model-runtime change in this phase — the voice service continues to call the same `POST /command` endpoint backed by the model runtime (llama.cpp + Qwen3-VL) built in Phase 1. No legacy runtime-specific code should remain here — verify no references to the previous runtime remain._
+
 ---
 
 ## Phase 7 — Dashboard UI
@@ -139,13 +157,17 @@ passes. Read `02-ARCHITECTURE.md`, `04-UI-DESIGN-SYSTEM.md`, and
 
 ## Phase 9 (v2) — Desktop Control
 
-1. `backend/src/automation/desktop/desktopRunner.js` — screenshot capture + mouse/keyboard action execution (PyAutoGUI or an open-source computer-use agent, per `02-ARCHITECTURE.md`).
-2. Extend `chooseChannel.js`: desktop control is now the fallback used only when a step targets a native (non-browser) app or no API/browser path exists.
+**Goal**: add native-app control by reusing the vision-capable model runtime already built in Phase 1 — no separate vision integration needed.
+
+1. `backend/src/automation/desktop/desktopRunner.js` — screenshot capture + mouse/keyboard action execution (PyAutoGUI or an open-source computer-use agent, per `02-ARCHITECTURE.md`). On each step that needs screen understanding, capture a screenshot and call the **existing** `describeScreen(imageBuffer, prompt)` from `backend/src/model/llamacppClient.js` (built in Phase 1) — e.g. `describeScreen(screenshot, "What UI elements are visible? Where is the 'Save' button?")` — to ground the next action. No new model, no separate vision service, no multi-model router.
+2. Extend `chooseChannel.js`: desktop control is now the fallback used only when a step targets a native (non-browser) app or no API/browser path exists. Vision calls via `describeScreen` are scoped to read-screen / desktop-control / ambiguous steps only; browser automation remains DOM-first via Playwright (see `02-ARCHITECTURE.md` §3).
 3. Implement the app whitelist per `05-SAFETY-AND-GUARDRAILS.md` §4.
 4. Implement file operations (create/rename/move/delete) as explicit action types — delete is always irreversible tier, no exceptions.
-5. Test: "create a folder called Invoices on my desktop" (reversible, auto-runs), then "delete it" (irreversible, requires approval).
+5. Test: "create a folder called Invoices on my desktop" (reversible, auto-runs), then "delete it" (irreversible, requires approval). Also test a vision-grounded case, e.g. "what's open on my screen right now?" or "click the Save button in Paint" — confirm `describeScreen` returns an accurate description that the desktop runner can act on.
 
-**Checkpoint**: at least 5 real desktop actions (open app, click, type, file create, file delete-with-approval) work end to end.
+**Checkpoint**: at least 5 real desktop actions (open app, click, type, file create, file delete-with-approval) work end to end, including at least one vision-grounded step that uses `describeScreen`.
+
+_This phase is simpler than it would be with a separate vision stack: the model client already handles both planning and vision, so desktop control only needs to add screenshotting and input automation around it._
 
 ---
 
@@ -163,9 +185,9 @@ passes. Read `02-ARCHITECTURE.md`, `04-UI-DESIGN-SYSTEM.md`, and
 
 ## Phase 11 (funded, v2.5) — Cloud Model Fallback
 
-1. Follow `06-SETUP-GUIDE.md` §8 to add the cloud client alongside the Ollama client.
-2. Add `requires_vision` / `high_complexity` flags to the planner's step schema; route flagged steps to the cloud client, everything else stays on Ollama.
-3. Test the same regression suite from Phase 8 with cloud fallback enabled on a couple of previously-unreliable screen-understanding cases, and confirm measurable improvement before treating this as "on" by default.
+1. Follow `06-SETUP-GUIDE.md` §8 to add the cloud client alongside the model runtime (llama.cpp + Qwen3-VL) client.
+2. Add `requires_vision` / `high_complexity` flags to the planner's step schema; route flagged steps to the cloud client, everything else stays on the local model runtime (llama.cpp + Qwen3-VL). Note: local Qwen3-VL already covers vision, so this is for hard reasoning or cases where local quality proves insufficient — not a mandatory vision path.
+3. Test the same regression suite from Phase 8 with cloud fallback enabled on a couple of previously-unreliable cases (e.g. complex reasoning, not merely screen reading), and confirm measurable improvement before treating this as "on" by default.
 
 **Checkpoint**: cloud fallback measurably improves the specific failure cases it was added for, without changing behavior (or cost) for the steps that didn't need it.
 
@@ -174,5 +196,5 @@ passes. Read `02-ARCHITECTURE.md`, `04-UI-DESIGN-SYSTEM.md`, and
 ## Notes for opencode
 
 - Do not begin a phase's checkpoint tests using mocked/stubbed data where real execution is specified — the checkpoints are meant to catch real integration issues, not just code compiling.
-- If a checkpoint fails, fix within the current phase before proceeding — later phases assume earlier guarantees hold (e.g. Phase 6 assumes Phase 2's approval gate is airtight).
+- If a checkpoint fails, fix within the current phase before proceeding — later phases assume earlier guarantees hold (e.g. Phase 6 assumes Phase 2's approval gate is airtight). For Phase 0.5, a failed checkpoint means reassessing model/quantization before any product code is built — do not proceed to Phase 1 on an unvalidated runtime.
 - Every new action type introduced in any phase must be added to the risk-tier classifier (`05-SAFETY-AND-GUARDRAILS.md` §1) before it's usable — no action type ships without a tier.
