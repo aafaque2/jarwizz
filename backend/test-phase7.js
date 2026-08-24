@@ -58,7 +58,7 @@ await test('Backend is running and healthy', async () => {
 // ── 2. WebSocket connects ──
 await test('WebSocket connects and receives events', async () => {
   await new Promise((resolve, reject) => {
-    const ws = new WS('ws://localhost:4000');
+    const ws = new WS('ws://localhost:4000/ws');
     const timeout = setTimeout(() => { ws.close(); reject(new Error('timeout')); }, 5000);
     ws.on('open', () => { clearTimeout(timeout); ws.close(); ok('WebSocket opened successfully'); resolve(); });
     ws.on('error', (err) => { clearTimeout(timeout); reject(err); });
@@ -168,11 +168,15 @@ await test('Screenshot static serving works', async () => {
 // ── 10. App.jsx wires everything together ──
 await test('App.jsx connects WebSocket and renders all components', async () => {
   const appSrc = fs.readFileSync(path.join(__dirname, '..', 'frontend', 'src', 'App.jsx'), 'utf8');
-  const required = ['ListeningOrb', 'CommandBox', 'TaskQueue', 'ApprovalModal', 'LogViewer', 'WebSocket', 'ws://', '/stop', '/approve', '/reject'];
+  // TaskQueue was superseded by ChatView (live task steps + status badges) in the
+  // chat-rooms refactor; both count as the live-task display component.
+  const required = ['ListeningOrb', 'CommandBox', 'ApprovalModal', 'LogViewer', 'WebSocket', 'ws://', '/stop', '/approve', '/reject'];
+  const taskDisplay = appSrc.includes('TaskQueue') || (appSrc.includes('ChatView') && fs.existsSync(path.join(__dirname, '..', 'frontend', 'src', 'components', 'ChatView.jsx')));
+  if (!taskDisplay) throw new Error('missing: live-task display (TaskQueue or ChatView)');
   for (const r of required) {
     if (!appSrc.includes(r)) throw new Error(`missing: ${r}`);
   }
-  ok('App.jsx imports all 5 components + WebSocket + stop/approve/reject wiring');
+  ok('App.jsx imports all components (ChatView supersedes TaskQueue) + WebSocket + stop/approve/reject wiring');
 });
 
 // ── 11. Vite proxy configured ──
