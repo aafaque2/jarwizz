@@ -1,47 +1,62 @@
 const { newPage, screenshot } = require('./playwrightRunner');
 
 const BROWSER_TIMEOUT = 15000;
+const CLICK_TIMEOUT = 8000;
+// Screenshots cost ~0.5s each (encode + disk write) twice per step.
+// Disabled by default for speed; error screenshots are always kept.
+const TAKE_SCREENSHOTS = process.env.SCREENSHOTS === '1';
 
 function inferUrlFromPayload(payload) {
   return payload.url || payload.target || null;
+}
+
+/** Repair model-generated selectors that would hang Playwright (unclosed brackets etc.) */
+function sanitizeSelector(sel) {
+  if (!sel || typeof sel !== 'string') return '';
+  let s = sel.trim();
+  const open = (s.match(/\[/g) || []).length;
+  const close = (s.match(/\]/g) || []).length;
+  if (open !== close) s = s.substring(0, s.indexOf('['));
+  return s.trim();
 }
 
 /**
  * Smart click: tries CSS selector first, then getByText, then getByRole('link').
  */
 async function smartClick(page, selectorStr, timeout) {
-  const hasRealSelector = selectorStr && selectorStr.trim() && !selectorStr.includes('""') && !selectorStr.includes("''");
+  const sel = sanitizeSelector(selectorStr);
+  const hasRealSelector = sel && !sel.includes('""') && !sel.includes("''");
 
   // 1. Try CSS selector (only if valid)
   if (hasRealSelector) {
     try {
-      const el = page.locator(selectorStr).first();
-      if (await el.count({ timeout: 3000 }) > 0) { await el.click({ timeout }); return; }
+      const el = page.locator(sel).first();
+      if (await el.count() > 0) { await el.click({ timeout: CLICK_TIMEOUT }); return; }
     } catch {}
   }
 
   // 2. Try getByText (exact)
   try {
     const el = page.getByText(selectorStr, { exact: true }).first();
-    if (await el.count() > 0) { await el.click({ timeout }); return; }
+    if (await el.count() > 0) { await el.click({ timeout: CLICK_TIMEOUT }); return; }
   } catch {}
 
   // 3. Try getByText (partial)
   try {
     const el = page.getByText(selectorStr, { exact: false }).first();
-    if (await el.count() > 0) { await el.click({ timeout }); return; }
+    if (await el.count() > 0) { await el.click({ timeout: CLICK_TIMEOUT }); return; }
   } catch {}
 
   // 4. Try getByRole('link')
   try {
     const el = page.getByRole('link', { name: selectorStr }).first();
-    if (await el.count() > 0) { await el.click({ timeout }); return; }
+    if (await el.count() > 0) { await el.click({ timeout: CLICK_TIMEOUT }); return; }
   } catch {}
 
-  // 5. Fallback: XPath text match
+  // 5. Fallback: XPath text match (pre-checked so a miss doesn't block the full timeout)
   try {
-    await page.locator(`xpath=//*[contains(text(), '${selectorStr.replace(/'/g, "")}')]`).first().click({ timeout });
-    return;
+    const el = page.locator(`xpath=//*[contains(text(), '${selectorStr.replace(/'/g, "")}')]`).first();
+    if (await el.count() > 0) { await el.click({ timeout: CLICK_TIMEOUT }); return; }
   } catch {}
 
   throw new Error(`Could not find clickable element matching "${selectorStr}"`);
@@ -53,26 +68,27 @@ async function smartClick(page, selectorStr, timeout) {
  */
 async function smartType(page, selectorStr, text, timeout) {
   // Skip empty/broken selectors
-  const hasRealSelector = selectorStr && selectorStr.trim() && !selectorStr.includes('""') && !selectorStr.includes("''");
+  const sel = sanitizeSelector(selectorStr);
+  const hasRealSelector = sel && !sel.includes('""') && !sel.includes("''");
 
   // 1. Try original CSS selector (only if it looks valid)
   if (hasRealSelector) {
     try {
-      const el = page.locator(selectorStr).first();
-      if (await el.count({ timeout: 3000 }) > 0) { await el.fill(text, { timeout }); return; }
+      const el = page.locator(sel).first();
+      if (await el.count() > 0) { await el.fill(text, { timeout: CLICK_TIMEOUT }); return; }
     } catch {}
   }
 
   // 2. Try getByRole('textbox') — most generic
   try {
     const el = page.getByRole('textbox').first();
-    if (await el.count({ timeout: 3000 }) > 0) { await el.fill(text, { timeout }); return; }
+    if (await el.count() > 0) { await el.fill(text, { timeout: CLICK_TIMEOUT }); return; }
   } catch {}
 
   // 3. Try getByRole('searchbox') — for search inputs
   try {
     const el = page.getByRole('searchbox').first();
-    if (await el.count({ timeout: 3000 }) > 0) { await el.fill(text, { timeout }); return; }
+    if (await el.count() > 0) { await el.fill(text, { timeout: CLICK_TIMEOUT }); return; }
   } catch {}
 
   // 4. Try getByPlaceholder
@@ -126,6 +142,8 @@ async function pressEnter(page) {
 async function executeBrowserAction(actionType, payload, sharedPage) {
   const page = sharedPage || await newPage();
 
+  const shot = async (label) => (TAKE_SCREENSHOTS ? await screenshot(page, label).catch(() => null) : null);
+
   let screenshotBefore = null;
   let screenshotAfter = null;
   let output = null;
@@ -133,11 +151,11 @@ async function executeBrowserAction(actionType, payload, sharedPage) {
   try {
     switch (actionType) {
       case 'browser_open':
-        screenshotBefore = await screenshot(page, 'before-open').catch(() => null);
+        screenshotBefore = await shot('before-open');
         await page.goto(payload.url || payload.target, { waitUntil: 'domcontentloaded', timeout: BROWSER_TIMEOUT });
         // Wait for JS to render interactive elements
-        await page.waitForTimeout(2000).catch(() => {});
-        screenshotAfter = await screenshot(page, 'after-open').catch(() => null);
+        await page.waitForTimeout(700).catch(() => {});
+        screenshotAfter = await shot('after-open');
         output = { url: page.url(), title: await page.title() };
         break;
 
@@ -146,11 +164,12 @@ async function executeBrowserAction(actionType, payload, sharedPage) {
         const url = inferUrlFromPayload(payload);
         if (url && !page.url().includes(new URL(url).hostname)) {
           await page.goto(url, { waitUntil: 'domcontentloaded', timeout: BROWSER_TIMEOUT });
+          await page.waitForTimeout(500).catch(() => {});
         }
-        screenshotBefore = await screenshot(page, 'before-click').catch(() => null);
+        screenshotBefore = await shot('before-click');
         await smartClick(page, payload.selector || payload.target, BROWSER_TIMEOUT);
         await page.waitForLoadState('domcontentloaded').catch(() => {});
-        screenshotAfter = await screenshot(page, 'after-click').catch(() => null);
+        screenshotAfter = await shot('after-click');
         output = { clicked: payload.selector || payload.target, url: page.url() };
         break;
       }
@@ -159,10 +178,10 @@ async function executeBrowserAction(actionType, payload, sharedPage) {
         const url = inferUrlFromPayload(payload);
         if (url && !page.url().includes(new URL(url).hostname)) {
           await page.goto(url, { waitUntil: 'domcontentloaded', timeout: BROWSER_TIMEOUT });
-          // Wait for page JS to render interactive elements (Google loads textarea async)
-          await page.waitForTimeout(2000).catch(() => {});
+          // Brief settle so page JS renders the input (Google loads textarea async)
+          await page.waitForTimeout(700).catch(() => {});
         }
-        screenshotBefore = await screenshot(page, 'before-type').catch(() => null);
+        screenshotBefore = await shot('before-type');
         await smartType(page, payload.selector || payload.target, payload.text || '', BROWSER_TIMEOUT);
 
         // Auto-press Enter on search pages (Google, Bing, DuckDuckGo) to submit query
@@ -173,7 +192,7 @@ async function executeBrowserAction(actionType, payload, sharedPage) {
           await page.waitForLoadState('domcontentloaded').catch(() => {});
         }
 
-        screenshotAfter = await screenshot(page, 'after-type').catch(() => null);
+        screenshotAfter = await shot('after-type');
         output = { filled: payload.text, selector: payload.selector || payload.target || 'auto-detected' };
         break;
       }
@@ -183,13 +202,13 @@ async function executeBrowserAction(actionType, payload, sharedPage) {
         if (url && !page.url().includes(new URL(url).hostname)) {
           await page.goto(url, { waitUntil: 'domcontentloaded', timeout: BROWSER_TIMEOUT });
         }
-        screenshotBefore = await screenshot(page, 'before-scroll').catch(() => null);
+        screenshotBefore = await shot('before-scroll');
         await page.evaluate((direction) => {
           const px = direction === 'up' ? -400 : 400;
-          window.scrollBy({ top: px, behavior: 'smooth' });
+          window.scrollBy({ top: px, behavior: 'auto' });
         }, payload.direction || 'down');
-        await page.waitForTimeout(500);
-        screenshotAfter = await screenshot(page, 'after-scroll').catch(() => null);
+        await page.waitForTimeout(300);
+        screenshotAfter = await shot('after-scroll');
         output = { scrolled: payload.direction || 'down', scrollY: await page.evaluate(() => window.scrollY) };
         break;
       }
@@ -198,9 +217,9 @@ async function executeBrowserAction(actionType, payload, sharedPage) {
         const url = inferUrlFromPayload(payload);
         if (url && !page.url().includes(new URL(url).hostname)) {
           await page.goto(url, { waitUntil: 'domcontentloaded', timeout: BROWSER_TIMEOUT });
-          await page.waitForTimeout(2000).catch(() => {});
+          await page.waitForTimeout(700).catch(() => {});
         }
-        screenshotBefore = await screenshot(page, 'before-read').catch(() => null);
+        screenshotBefore = await shot('before-read');
 
         let text = '';
         // Try the model's selector first
@@ -234,7 +253,7 @@ async function executeBrowserAction(actionType, payload, sharedPage) {
         // Truncate to avoid huge payloads to the LLM
         if (text.length > 4000) text = text.substring(0, 4000) + '\n...(truncated)';
 
-        screenshotAfter = await screenshot(page, 'after-read').catch(() => null);
+        screenshotAfter = await shot('after-read');
         output = { text, url: page.url(), title: await page.title() };
         break;
       }
@@ -243,7 +262,8 @@ async function executeBrowserAction(actionType, payload, sharedPage) {
         throw new Error(`Unknown browser action: ${actionType}`);
     }
   } catch (err) {
-    screenshotAfter = await screenshot(page, 'error').catch(() => null);
+    // Always capture an error screenshot for debugging
+    await screenshot(page, 'error').catch(() => null);
     throw err;
   }
 
