@@ -226,6 +226,22 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
   const content = await callLlamaCpp(messages, { temperature: 0.2 });
 
   let plan;
+  function repairTruncatedJson(str) {
+    // Balance braces/brackets for truncated model output like {"steps": [...} missing final }
+    let s = str.trim();
+    // Extract first JSON object if wrapped in text/markdown
+    const firstBrace = s.indexOf('{');
+    const lastBrace = s.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1) s = s.slice(firstBrace, lastBrace + 1);
+    // Count and append missing closings
+    const openBraces = (s.match(/{/g) || []).length;
+    const closeBraces = (s.match(/}/g) || []).length;
+    const openBrackets = (s.match(/\[/g) || []).length;
+    const closeBrackets = (s.match(/\]/g) || []).length;
+    if (openBrackets > closeBrackets) s += ']'.repeat(openBrackets - closeBrackets);
+    if (openBraces > closeBraces) s += '}'.repeat(openBraces - closeBraces);
+    return s;
+  }
   try {
     plan = JSON.parse(content);
   } catch {
@@ -247,7 +263,13 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
     try {
       plan = JSON.parse(fixed);
     } catch {
-      throw new Error(`Failed to parse model output as JSON: ${content.substring(0, 200)}`);
+      // Try repairing truncated JSON (missing closing } / ])
+      try {
+        const repaired = repairTruncatedJson(fixed);
+        plan = JSON.parse(repaired);
+      } catch {
+        throw new Error(`Failed to parse model output as JSON: ${content.substring(0, 200)}`);
+      }
     }
   }
 
@@ -259,7 +281,7 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
   // — these previously crashed downstream code reading properties off undefined
   plan.steps = plan.steps.filter(s => s && typeof s === 'object' && !Array.isArray(s));
 
-  // Post-process: validate and fix steps
+  // Post-process: validate and fix steps — tier correction mirrors guardrails/classifier.js (defense in depth)
   const validTiers = ['read-only', 'reversible', 'irreversible'];
   const validActionTypes = [
     'browser_open', 'browser_click', 'browser_type', 'browser_scroll', 'browser_read',
@@ -267,16 +289,42 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
     'file_create', 'file_delete', 'app_open',
     'summarize', 'answer_question',
   ];
+  const IRREVERSIBLE = new Set(['gmail_send','file_delete','form_submit','app_submit','payment','account_settings_change','job_application_submit','unknown']);
+  const REVERSIBLE = new Set(['browser_open','browser_click','browser_type','browser_scroll','gmail_draft','gmail_open','file_create','app_open','search_web']);
+  const READ_ONLY = new Set(['browser_read','gmail_read','summarize','answer_question']);
   for (const step of plan.steps) {
     if (!step.description) step.description = 'Unnamed step';
     if (!step.action_type) step.action_type = 'unknown';
     if (!step.payload || typeof step.payload !== 'object') step.payload = {};
-    if (!validTiers.includes(step.tier)) step.tier = 'irreversible';
+    // Preserve original tier for correction logic
+    const modelTier = step.tier;
     if (!validActionTypes.includes(step.action_type)) {
       step.action_type = 'answer_question';
       step.payload = { source: 'llm', query: step.description };
       step.tier = 'read-only';
+      continue;
     }
+    // Correct tier based on action_type (never de-escalate except to fix invalid "basic"/missing)
+    let correctedTier = modelTier;
+    if (IRREVERSIBLE.has(step.action_type)) {
+      correctedTier = 'irreversible';
+    } else if (READ_ONLY.has(step.action_type) && correctedTier === 'irreversible') {
+      correctedTier = 'read-only';
+    } else if (REVERSIBLE.has(step.action_type) && correctedTier === 'irreversible') {
+      correctedTier = 'reversible';
+    } else if (modelTier === 'read-only' && REVERSIBLE.has(step.action_type)) {
+      correctedTier = 'reversible';
+    }
+    if (!validTiers.includes(correctedTier)) {
+      if (READ_ONLY.has(step.action_type)) correctedTier = 'read-only';
+      else if (REVERSIBLE.has(step.action_type)) correctedTier = 'reversible';
+      else if (IRREVERSIBLE.has(step.action_type)) correctedTier = 'irreversible';
+      else correctedTier = 'irreversible';
+    }
+    if (!IRREVERSIBLE.has(step.action_type) && !REVERSIBLE.has(step.action_type) && !READ_ONLY.has(step.action_type)) {
+      correctedTier = 'irreversible';
+    }
+    step.tier = correctedTier;
     // Repair selectors mangled by JSON quoting issues (e.g. "ytd-video-renderer[truncated=")
     for (const key of ['selector', 'target']) {
       const sel = step.payload[key];
