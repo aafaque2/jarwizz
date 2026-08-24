@@ -164,6 +164,10 @@ async function runPlan(plan, broadcast) {
     if (channel === 'browser') return enforceDomainWhitelist(s);
     return s;
   });
+  // Write enforced tiers back onto the caller's plan so API responses reflect
+  // actual enforcement (e.g. non-whitelisted domains show irreversible)
+  plan.steps = classified.steps;
+  if (classified._skipClassification) plan._skipClassification = true;
 
   const taskId = randomUUID();
   const results = [];

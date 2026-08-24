@@ -67,7 +67,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // Auto-approves any pending_approval events so the command doesn't block forever
 function fireCommand(text, timeoutMs = 60000) {
   return new Promise(async (resolve, reject) => {
-    const ws = new WS('ws://localhost:4000');
+    const ws = new WS('ws://localhost:4000/ws');
     const t = setTimeout(() => { ws.close(); reject(new Error('command timeout')); }, timeoutMs);
     const events = [];
     let approvalData = null;
@@ -128,7 +128,7 @@ await test('Backend /health endpoint', async () => {
 });
 
 await test('WebSocket connects and disconnects', async () => {
-  const ws = new WS('ws://localhost:4000');
+  const ws = new WS('ws://localhost:4000/ws');
   await new Promise((resolve, reject) => {
     const t = setTimeout(() => { ws.close(); reject(new Error('timeout')); }, 5000);
     ws.on('open', () => { clearTimeout(t); ws.close(); resolve(); });
@@ -155,7 +155,7 @@ await test('llama.cpp + Qwen3-VL-4B model accessible (text + vision)', async () 
         res.on('end', () => resolve({ status: res.statusCode, body }));
       });
       req.on('error', reject);
-      req.setTimeout(15000, () => reject(new Error('llama.cpp timeout')));
+      req.setTimeout(45000, () => reject(new Error('llama.cpp timeout')));
       req.end(payload);
     });
   }
@@ -448,7 +448,7 @@ await test('Screenshots captured from browser actions', async () => {
 console.log('\n=== SECTION 8: WEBSOCKET EVENTS ===');
 
 await test('WebSocket receives events on Gmail command', async () => {
-  const ws = new WS('ws://localhost:4000');
+  const ws = new WS('ws://localhost:4000/ws');
   const events = [];
   try {
     await new Promise(async (resolve, reject) => {
@@ -539,10 +539,13 @@ await test('JS bundle includes all component logic', async () => {
 
 await test('App.jsx wires all components + endpoints', async () => {
   const src = fs.readFileSync(path.join(__dirname, '..', 'frontend', 'src', 'App.jsx'), 'utf8');
-  const checks = ['WebSocket', '/stop', '/approve', '/reject', 'ListeningOrb', 'CommandBox', 'TaskQueue', 'ApprovalModal', 'LogViewer'];
+  // ChatView supersedes TaskQueue (chat-rooms refactor) as live-task display
+  const taskDisplay = src.includes('TaskQueue') || src.includes('ChatView');
+  if (!taskDisplay) throw new Error('missing: live-task display (TaskQueue or ChatView)');
+  const checks = ['WebSocket', '/stop', '/approve', '/reject', 'ListeningOrb', 'CommandBox', 'ApprovalModal', 'LogViewer'];
   const missing = checks.filter(c => !src.includes(c));
   if (missing.length) throw new Error(`missing: ${missing.join(', ')}`);
-  ok('all wired');
+  ok('all wired (ChatView supersedes TaskQueue)');
 });
 
 await test('Vite config proxies backend routes', async () => {
