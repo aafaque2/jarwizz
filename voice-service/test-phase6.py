@@ -152,16 +152,13 @@ except Exception as e:
 
 
 # ── Test 9: Stop phrase detection ──
-test("Stop phrase detection from audio")
+test("Stop phrase detection from transcript")
 try:
-    from main import check_stop_phrase
-    from tts.speak import speak_piper
-    import numpy as np
-    # Generate 2 seconds of silence — won't trigger stop, but verifies the function runs
-    silence = np.zeros(32000, dtype=np.float32) * 0.001
-    result = check_stop_phrase(silence)
-    # Just verify it doesn't crash; silence won't contain "stop"
-    ok(f"stop phrase check runs without error (silence -> {result})")
+    from main import is_stop_phrase, STOP_PHRASES
+    assert is_stop_phrase("jarwizz stop") is True
+    assert is_stop_phrase("please stop that") is True
+    assert is_stop_phrase("what time is it") is False
+    ok(f"stop phrase detection works ({len(STOP_PHRASES)} phrases)")
 except Exception as e:
     fail(str(e))
 
@@ -170,8 +167,7 @@ except Exception as e:
 test("Voice service can connect to backend WebSocket")
 try:
     import websocket as ws_lib
-    ws = ws_lib.create_connection("ws://localhost:4000", timeout=5)
-    ws.send(json.dumps({"type": "ping"}))
+    ws = ws_lib.create_connection("ws://localhost:4000/ws", timeout=5)
     ws.close()
     ok("WebSocket connection established and closed")
 except Exception as e:
