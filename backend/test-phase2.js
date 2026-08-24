@@ -19,7 +19,7 @@ function waitForEvent(ws, eventName, timeoutMs = 180000) {
 }
 
 async function test() {
-  const ws = new WebSocket('ws://localhost:4000');
+  const ws = new WebSocket('ws://localhost:4000/ws');
   await new Promise(r => ws.on('open', r));
   console.log('WebSocket connected.\n');
 
