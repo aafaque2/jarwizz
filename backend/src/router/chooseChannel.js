@@ -8,7 +8,7 @@
  * Phase 3: browser. Phase 4: API (Gmail). Desktop is a placeholder stub.
  */
 function chooseChannel(step) {
-  const { action_type } = step;
+  const action_type = step?.action_type || '';
 
   // API channel — Gmail, Calendar, etc.
   if (action_type.startsWith('gmail_') || action_type === 'api_call') {

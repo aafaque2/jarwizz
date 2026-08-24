@@ -6,7 +6,7 @@ const { WebSocketServer } = require('ws');
 require('dotenv').config();
 
 const { generatePlan } = require('./model/ollamaClient');
-const { requestStop, runPlan, approveStep, rejectStep, shutdown } = require('./orchestrator/taskRunner');
+const { requestStop, runPlan, approveStep, rejectStep, cancelPendingApprovals, shutdown } = require('./orchestrator/taskRunner');
 const { readLogs } = require('./guardrails/logger');
 const { isWhitelisted, addToWhitelist, loadWhitelist } = require('./guardrails/whitelist');
 const { initGmail, getAuthUrl, completeAuth, isMockMode } = require('./integrations/gmail/client');
@@ -91,6 +91,7 @@ app.post('/command', async (req, res) => {
 
 app.post('/stop', (req, res) => {
   requestStop();
+  cancelPendingApprovals();
   lastPendingApproval = null;
   console.log('[STOP] Kill switch triggered');
   broadcast('stop', { message: 'All tasks stopped' });

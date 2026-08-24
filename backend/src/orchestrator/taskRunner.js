@@ -11,9 +11,23 @@ const { storeTaskHistory } = require('../memory/store');
 let stopFlag = false;
 const pendingApprovals = new Map();
 
-function requestStop() { stopFlag = true; }
+function requestStop() {
+  stopFlag = true;
+  // Resolve any awaited approvals so runPlan doesn't hang forever after /stop
+  for (const [stepId, pending] of pendingApprovals) {
+    pending.resolve('stopped');
+    pendingApprovals.delete(stepId);
+  }
+}
 function resetStop() { stopFlag = false; }
 function isStopped() { return stopFlag; }
+
+function cancelPendingApprovals() {
+  for (const [stepId, pending] of pendingApprovals) {
+    pending.resolve('stopped');
+    pendingApprovals.delete(stepId);
+  }
+}
 
 function requestApproval(step) {
   return new Promise((resolve) => { pendingApprovals.set(step.step_id, { resolve }); });
@@ -77,9 +91,12 @@ async function executeStep(step, sharedPages, conversationContext) {
       { role: 'system', content: 'You are Jarwizz, a helpful voice assistant. Answer the user\'s question directly and concisely. Never output your reasoning or planning — just give the final answer. If the user asks "what is X", answer what X is. If they ask "tell me about X", give a brief summary. Be specific and factual. Max 2-3 sentences.' },
     ];
 
-    // Inject conversation history if available
+    // Inject conversation history if available (trimmed for speed)
     if (conversationContext) {
-      messages.push({ role: 'system', content: `Previous conversation:\n${conversationContext}` });
+      const trimmed = conversationContext.length > 1200
+        ? '...\n' + conversationContext.slice(-1200)
+        : conversationContext;
+      messages.push({ role: 'system', content: `Previous conversation:\n${trimmed}` });
     }
 
     messages.push({ role: 'user', content: p.query || p.source || 'Hello' });
@@ -91,6 +108,7 @@ async function executeStep(step, sharedPages, conversationContext) {
         model: OLLAMA_MODEL,
         messages,
         stream: false,
+        keep_alive: '10m',
       }),
     });
     const data = await response.json();
@@ -172,6 +190,19 @@ async function runPlan(plan, broadcast) {
 
       const decision = await requestApproval(step);
 
+      if (decision === 'stopped') {
+        const skipResult = {
+          step_id: step.step_id, step_index: i, ...step,
+          status: 'skipped', approval_status: 'stopped', reason: 'stopped',
+          timestamp: new Date().toISOString(),
+        };
+        results.push(skipResult);
+        logAction({ task_id: taskId, ...skipResult, result: 'failure', error: 'stopped' });
+        if (broadcast) broadcast('step_skipped', skipResult);
+        console.log(`  [STOPPED] Step ${i + 1}`);
+        continue;
+      }
+
       if (decision !== 'approved') {
         const skipResult = {
           step_id: step.step_id, step_index: i, ...step,
@@ -222,9 +253,12 @@ async function runPlan(plan, broadcast) {
     console.warn('[MEMORY] Failed to store task:', err.message);
   });
 
+  // Tell clients the plan is done so they can clear live-task state
+  if (broadcast) broadcast('plan_finished', { task_id: taskId, total: results.length });
+
   return { task_id: taskId, results };
 }
 
 async function shutdown() { await closeBrowser(); }
 
-module.exports = { requestStop, resetStop, isStopped, runPlan, approveStep, rejectStep, shutdown };
+module.exports = { requestStop, resetStop, isStopped, runPlan, approveStep, rejectStep, cancelPendingApprovals, shutdown };
