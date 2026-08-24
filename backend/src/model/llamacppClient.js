@@ -192,15 +192,25 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
   let memoryContextStr = memoryContext || '';
   // Semantic recall requires an embedding round-trip per command; it evicts the
   // main LLM from VRAM/keeps it cold and adds seconds of latency. Opt-in only.
+  // Preferences are always injected — cheap SQLite read, no embedding round-trip.
+  const { getAllPreferences } = require('../memory/store');
+  try {
+    const prefs = getAllPreferences();
+    if (prefs.length > 0) {
+      memoryContextStr = `User preferences:\n${prefs.map(p => `${p.key}: ${p.value}`).join('\n')}`;
+    }
+  } catch {}
+
+  // Semantic task recall is opt-in: it needs an embedding round-trip per command
+  // (evicts the main LLM from VRAM / adds seconds of latency). Set JARWIZZ_SEMANTIC_MEMORY=1.
   if (process.env.JARWIZZ_SEMANTIC_MEMORY === '1') {
     try {
       const recalled = await recallRelevant(commandText, 3);
       const parts = [];
-      if (recalled.preferences) parts.push(`User preferences:\n${recalled.preferences}`);
       if (recalled.memories.length > 0) {
         parts.push(`Relevant past tasks:\n${recalled.memories.map(m => `- ${m.text} → ${m.summary}`).join('\n')}`);
       }
-      if (parts.length) memoryContextStr = parts.join('\n\n');
+      if (parts.length) memoryContextStr = memoryContextStr ? `${memoryContextStr}\n\n${parts.join('\n\n')}` : parts.join('\n\n');
     } catch {}
   }
 

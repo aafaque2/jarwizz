@@ -86,9 +86,19 @@ async function executeStep(step, sharedPages, conversationContext) {
     const LLAMACPP_URL = process.env.LLAMACPP_URL || 'http://127.0.0.1:8080';
     const LLAMACPP_MODEL = process.env.LLAMACPP_MODEL || 'qwen3-vl-4b';
 
+    // Inject stored preferences so questions like "what is my email" recall from memory
+    let prefContext = '';
+    try {
+      const { getAllPreferences } = require('../memory/store');
+      const prefs = getAllPreferences();
+      if (prefs.length > 0) {
+        prefContext = `\n\nUser's stored information (authoritative — use it to answer personal questions):\n${prefs.map(pr => `${pr.key}: ${pr.value}`).join('\n')}`;
+      }
+    } catch {}
+
     // Build messages — include conversation context if available
     const messages = [
-      { role: 'system', content: 'You are Jarwizz, a helpful voice assistant. Answer the user\'s question directly and concisely. Never output your reasoning or planning — just give the final answer. If the user asks "what is X", answer what X is. If they ask "tell me about X", give a brief summary. Be specific and factual. Max 2-3 sentences.' },
+      { role: 'system', content: 'You are Jarwizz, a helpful voice assistant. Answer the user\'s question directly and concisely. Never output your reasoning or planning — just give the final answer. If the user asks "what is X", answer what X is. If they ask "tell me about X", give a brief summary. Be specific and factual. Max 2-3 sentences. If stored user information is provided and relevant, use it as the answer.' + prefContext },
     ];
 
     // Inject conversation history if available (trimmed for speed)
