@@ -8,24 +8,92 @@ Follow in order. Each step is independently testable before moving on.
 - Python 3.10+
 - Git
 - A working microphone and speakers
-- GPU with 8GB+ VRAM is a strong nice-to-have, not required to start
+- GPU with 8GB+ VRAM is a strong nice-to-have, not required to start — on the current dev machine (AMD RX 5500M, Navi 14 / gfx1012) llama.cpp with the **Vulkan** backend is the supported local path (ROCm is not officially supported on this GPU; see `02-ARCHITECTURE.md` §2). Vulkan drivers must be installed and up to date.
+- Vulkan runtime/drivers: on Windows install the latest AMD Adrenalin driver (includes Vulkan); on Linux install `mesa-vulkan-drivers` / `vulkan-tools` for your distro and confirm `vulkaninfo` runs.
 
 ```bash
 node -v && npm -v && python3 --version && git --version
+vulkaninfo --summary   # should list your GPU — if this fails, fix Vulkan before continuing
 ```
 
-## 1. Install Ollama (local model runtime)
+## 1. Install llama.cpp with Vulkan (local model runtime)
+
+Do **not** use ROCm on the RX 5500M — it is not officially supported on this GPU. The correct local path is llama.cpp with the Vulkan backend (cross-vendor, no ROCm/CUDA needed).
+
+### 1a. Build llama.cpp with Vulkan support
+
+**Windows (MSVC or MinGW) — Vulkan enabled:**
+```bash
+git clone https://github.com/ggerganov/llama.cpp
+cd llama.cpp
+# Option A: CMake (recommended)
+cmake -B build -DGGML_VULKAN=1
+cmake --build build --config Release
+# Binaries land in build/bin/ — e.g. build/bin/llama-server.exe and llama-cli.exe
+```
+On Linux the same CMake flags apply (`-DGGML_VULKAN=1`). Prebuilt Vulkan-enabled binaries are also published on the llama.cpp releases page — if you use a prebuilt zip, verify the filename/build notes explicitly mention Vulkan; a CPU-only build will silently run without GPU offload.
+
+Verify the build reports Vulkan at startup — running `llama-server --help` should list `--vulkan` / Vulkan-related flags, and starting the server (step 1c) must log `vulkan` device detection, not just `cpu`.
+
+### 1b. Download Qwen3-VL-4B GGUF (Q4_K_M)
+
+The MVP model is **Qwen3-VL-4B, GGUF Q4_K_M** quantization — vision-capable, Apache 2.0 licensed, runs in ~3–6 GB at Q4, a good fit for 8 GB total RAM. Use the Q4_K_M quantized file (not the full-precision model).
 
 ```bash
-curl -fsSL https://ollama.com/install.sh | sh   # macOS/Linux
-# Windows: installer from https://ollama.com/download
-ollama pull llama3.1:8b
+# Example using huggingface-cli (or download manually from Hugging Face):
+pip install -U "huggingface_hub[cli]"
+huggingface-cli download Qwen/Qwen3-VL-4B-GGUF --include "*Q4_K_M*" --local-dir ./models
+# Result should be a single .gguf file such as: qwen3-vl-4b-q4_k_m.gguf
+# Place it at e.g. C:\models\qwen3-vl-4b-q4_k_m.gguf  (Windows)  or  ~/models/  (Linux/macOS)
 ```
 
-Test:
+> If the exact repo/filename differs, pick the **Qwen3-VL-4B Q4_K_M GGUF** published by Qwen — the key properties are: Qwen3-VL-4B base, GGUF container, `Q4_K_M` quantization.
+
+### 1c. Smoke test — confirm Vulkan GPU offload is actually active
+
+This test has two mandatory checks. Do not skip (a): a CPU-only llama.cpp build will still generate text, but without GPU offload latency will be far worse and you will mistakenly think the GPU is being used.
+
+**Start the server with Vulkan offload:**
 ```bash
-curl http://localhost:11434/api/generate -d '{"model":"llama3.1:8b","prompt":"Say hello in one sentence."}'
+# Adjust paths to where you built/downloaded:
+./build/bin/llama-server \
+  --model /path/to/qwen3-vl-4b-q4_k_m.gguf \
+  --vulkan \
+  --gpu-layers 99 \
+  --ctx-size 8192 \
+  --host 127.0.0.1 --port 8080
+# On Windows: .\build\bin\Release\llama-server.exe --model C:\models\qwen3-vl-4b-q4_k_m.gguf --vulkan --gpu-layers 99 --ctx-size 8192 --host 127.0.0.1 --port 8080
 ```
+
+**(a) Verify Vulkan is actually in use (not silently CPU-only):**
+- The server log on startup must mention `vulkan` / `Vulkan` and enumerate your GPU (e.g. `AMD Radeon RX 5500M` / `gfx1012`). If the log only mentions `cpu` or shows `0 layers offloaded`, the build is CPU-only — rebuild with `-DGGML_VULKAN=1` or use a known Vulkan-enabled binary.
+- Optional extra confirmation: observe GPU utilization while the server is generating (Task Manager → Performance → GPU, or `radeontop` / `nvtop` on Linux) — it should spike during generation. No GPU activity means offload is not active.
+
+**(b) Text-only prompt test:**
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"qwen3-vl-4b\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hello in one sentence.\"}],\"temperature\":0.2}"
+# Expect: JSON with choices[0].message.content containing a hello sentence. Note the wall-clock latency.
+```
+
+**(c) Vision (image+prompt) test — same server, same model:**
+```bash
+# Encode any small test image as base64 (e.g. a screenshot or photo):
+# Linux/macOS:
+IMAGE_B64=$(base64 -w 0 /path/to/test-image.png)
+# Windows PowerShell:
+# $IMAGE_B64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\path\to\test-image.png"))
+
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d "{\"model\":\"qwen3-vl-4b\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"Describe what is visible in this image in one sentence.\"},{\"type\":\"image_url\",\"image_url\":{\"url\":\"data:image/png;base64,'$IMAGE_B64'\"}}]]},\"temperature\":0.2}"
+# Expect: a one-sentence description of the image. If the server returns an error about images/unsupported content, the model file or server version does not support vision — re-check you downloaded Qwen3-VL (not text-only Qwen3) and are on a recent llama.cpp build.
+```
+
+**Latency check:** both calls should complete in a time that feels interactive on this hardware (seconds, not minutes). There is no fixed millisecond threshold — judge whether the delay would be tolerable mid-task while voice-controlling Jarwizz. If either call takes unreasonably long or Vulkan offload is not active, stop and reassess quantization/model choice before continuing — see `07-IMPLEMENTATION-PLAN.md` Phase 0.5.
+
+Keep this server running for subsequent phases — the orchestrator will call it via `LLAMACPP_URL` (see §2 below). Stop it with Ctrl+C when done testing.
 
 ## 2. Scaffold the repo
 
@@ -45,9 +113,11 @@ npm install -D nodemon
 `.env`:
 ```
 PORT=4000
-MODEL_PROVIDER=ollama
-OLLAMA_URL=http://localhost:11434
-OLLAMA_MODEL=llama3.1:8b
+MODEL_PROVIDER=llamacpp
+LLAMACPP_URL=http://127.0.0.1:8080
+MODEL_PATH=/path/to/qwen3-vl-4b-q4_k_m.gguf
+# Optional tuning for the server process (if you launch it from Node):
+# LLAMACPP_ARGS=--vulkan --gpu-layers 99 --ctx-size 8192
 # Filled in later when funded:
 # CLOUD_MODEL_PROVIDER=anthropic
 # CLOUD_MODEL_API_KEY=
@@ -171,7 +241,7 @@ Play `test.wav` to confirm audio output works.
 
 ## 7. Verify each pillar independently before wiring together
 
-1. `curl` to Ollama returns text → model runtime OK.
+1. llama.cpp server health + Vulkan offload confirmed and `curl` to `LLAMACPP_URL/v1/chat/completions` returns text for **both** a text-only prompt and an image+prompt (vision) call with reasonable latency → model runtime OK. If Vulkan is not active or either call fails/slow, do not proceed — revisit the build/model choice (see §1c and `07-IMPLEMENTATION-PLAN.md` Phase 0.5).
 2. `node test-playwright.js` opens a browser and navigates → automation OK.
 3. Express server on port 4000 responds to `/health` → backend OK.
 4. `test_mic.py` shows non-zero amplitude → mic capture OK.
@@ -179,12 +249,12 @@ Play `test.wav` to confirm audio output works.
 6. faster-whisper transcribes a test phrase correctly → STT OK.
 7. Piper produces audible speech → TTS OK.
 
-Only once all seven pass independently should orchestration wiring begin — see `07-IMPLEMENTATION-PLAN.md` Phase 1.
+Only once all seven pass independently should orchestration wiring begin — see `07-IMPLEMENTATION-PLAN.md` Phase 1 (and Phase 0.5 validation before it).
 
 ## 8. When you add a cloud API later
 
 1. Add `CLOUD_MODEL_PROVIDER` and `CLOUD_MODEL_API_KEY` to `backend/.env`.
-2. In `backend/src/model/`, add a second client implementing the same interface as the Ollama client (e.g. `generatePlan(prompt)`).
-3. In the router, add a rule: steps flagged `requires_vision` or `high_complexity` call the cloud client; everything else keeps using Ollama.
+2. In `backend/src/model/`, add a second client implementing the same interface as the llama.cpp client (e.g. `generatePlan(prompt)` and `describeScreen(imageBuffer, prompt)`).
+3. In the router, add a rule: steps flagged `requires_vision` or `high_complexity` call the cloud client; everything else keeps using the local model runtime (llama.cpp + Qwen3-VL).
 
-No architecture change required — this is a config-level swap by design.
+No architecture change required — this is a config-level swap by design. The local Qwen3-VL model already handles vision, so cloud fallback is for hard reasoning or cases where local quality proves insufficient — not a mandatory vision path.
