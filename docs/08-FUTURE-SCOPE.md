@@ -18,6 +18,7 @@ revisit, not a roadmap.
 - **Fine-tuning a local model on your own usage patterns** — over time, your command phrasing, common tasks, and preferences could fine-tune a small local model to plan more accurately without needing cloud fallback as often.
 - **Better memory consolidation** — summarizing/pruning old task history intelligently rather than letting the memory store grow unbounded.
 - **Self-correcting execution** — steps that detect their own likely failure (e.g. a click didn't produce the expected page state) and retry or re-plan rather than just failing.
+- **Multi-model router (separate fast / vision / reasoning models)** — explicitly deferred from v1. The MVP uses a single vision-capable model (Qwen3-VL-4B via llama.cpp) for both planning and screen understanding through one client interface. A router that splits traffic across specialized models is a later optimization to revisit only if latency/quality tradeoffs justify the added complexity — not something to build now.
 
 ## Platform maturity
 
