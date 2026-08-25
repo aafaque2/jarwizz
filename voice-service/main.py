@@ -19,14 +19,11 @@ import sounddevice as sd
 import websocket  # websocket-client
 
 # ── Push-to-talk hotkey (Ctrl+Shift hold) ──
-try:
-    from pynput import keyboard as _pynput_keyboard
-    HAVE_PYNPUT = True
-except Exception:
-    HAVE_PYNPUT = False
+# hotkey.start() picks evdev on Linux (works under Wayland, where pynput's X11
+# hooks never see key events) and pynput elsewhere.
+import hotkey as _hotkey
 
 hotkey_event = threading.Event()  # set while the Ctrl+Shift combo is held
-_pressed_keys = set()
 VOICE_CHAT_ID = None  # stable chat session for conversational context
 
 # ── Paths ──
@@ -466,34 +463,12 @@ def main():
     # v1 default = push-to-talk (hold Ctrl+Shift). Always-listen is opt-in (--always).
     hotkey_mode = (not args.wake and not args.always)
 
-    def _on_press(key):
-        try:
-            _pressed_keys.add(key.name if hasattr(key, "name") and key.name else str(key))
-        except Exception:
-            pass
-        ctrl = any(k in _pressed_keys for k in ("ctrl", "ctrl_l", "ctrl_r"))
-        shift = any(k in _pressed_keys for k in ("shift", "shift_l", "shift_r"))
-        if ctrl and shift:
-            hotkey_event.set()
-
-    def _on_release(key):
-        try:
-            _pressed_keys.discard(key.name if hasattr(key, "name") and key.name else str(key))
-        except Exception:
-            pass
-        ctrl = any(k in _pressed_keys for k in ("ctrl", "ctrl_l", "ctrl_r"))
-        shift = any(k in _pressed_keys for k in ("shift", "shift_l", "shift_r"))
-        if not (ctrl and shift):
-            hotkey_event.clear()
-
     if hotkey_mode:
-        if HAVE_PYNPUT:
-            _hk = _pynput_keyboard.Listener(on_press=_on_press, on_release=_on_release)
-            _hk.daemon = True
-            _hk.start()
-            print("[VOICE] Push-to-talk: HOLD Ctrl+Shift, speak, RELEASE to send. (Not always listening.)")
-        else:
-            print("[VOICE] pynput missing — falling back to continuous listen. (pip install pynput)")
+        try:
+            backend = _hotkey.start(hotkey_event)
+            print(f"[VOICE] Push-to-talk via {backend}: HOLD Ctrl+Shift, speak, RELEASE to send. (Not always listening.)")
+        except Exception as e:
+            print(f"[VOICE] Push-to-talk unavailable ({e}) — falling back to continuous listen.")
             hotkey_mode = False
 
     if not hotkey_mode and not args.wake:
