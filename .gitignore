@@ -12,3 +12,4 @@ backend/memory.db
 backend/memory.db-shm
 backend/memory.db-wal
 backend/memory-embeddings.jsonl
+.run/
