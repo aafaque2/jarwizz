@@ -11,6 +11,8 @@ import queue
 import threading
 import argparse
 import traceback
+import urllib.request
+import urllib.error
 
 import numpy as np
 import sounddevice as sd
@@ -579,30 +581,37 @@ def main():
             # Summarize results
             steps = result.get("results", [])
 
-            # Speak the actual assistant answer when one was produced (greetings,
-            # Q&A, summaries) instead of a generic "Done: <step description>".
-            answer_text = None
-            for s in steps:
-                ot = (s.get("output") or {}).get("text")
-                if ot and s.get("action_type") in ("answer_question", "summarize", "llm"):
-                    answer_text = ot
-                    break
-            if answer_text:
-                speak(answer_text)
+            # Speak the backend's conversational reply when present (covers
+            # greetings, Q&A, and 0-step plans that previously produced the
+            # nonsensical "All 0 steps completed successfully").
+            reply_text = result.get("reply")
+            if reply_text:
+                speak(reply_text)
             else:
-                completed = sum(1 for s in steps if s.get("status") == "completed")
-                errors = sum(1 for s in steps if s.get("status") == "error")
-                total = len(steps)
-
-                if errors:
-                    speak(f"Done with {completed} of {total} steps, but there were {errors} errors.")
-                elif completed == total:
-                    if total == 1:
-                        speak(f"Done: {steps[0].get('description', 'step complete')}.")
-                    else:
-                        speak(f"All {total} steps completed successfully.")
+                answer_text = None
+                for s in steps:
+                    ot = (s.get("output") or {}).get("text")
+                    if ot and s.get("action_type") in ("answer_question", "summarize", "llm"):
+                        answer_text = ot
+                        break
+                if answer_text:
+                    speak(answer_text)
                 else:
-                    speak(f"Completed {completed} of {total} steps.")
+                    completed = sum(1 for s in steps if s.get("status") == "completed")
+                    errors = sum(1 for s in steps if s.get("status") == "error")
+                    total = len(steps)
+
+                    if not total:
+                        speak("Done.")
+                    elif errors:
+                        speak(f"Done with {completed} of {total} steps, but there were {errors} errors.")
+                    elif completed == total:
+                        if total == 1:
+                            speak(f"Done: {steps[0].get('description', 'step complete')}.")
+                        else:
+                            speak(f"All {total} steps completed successfully.")
+                    else:
+                        speak(f"Completed {completed} of {total} steps.")
 
             set_state(STATE_RESPONSE)
             time.sleep(0.5)
