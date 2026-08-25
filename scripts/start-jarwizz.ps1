@@ -19,8 +19,9 @@ if (-not $LlamaExe) {
   # Prebuilt Vulkan llama.cpp used during development
   $LlamaExe = 'C:\Users\aafaq\AppData\Local\Temp\opencode\llama-b10612-vulkan\llama-server.exe'
 }
-$BackendDir = Join-Path $PSScriptRoot '..' 'backend' | Resolve-Path
-$VoiceDir   = Join-Path $PSScriptRoot '..' 'voice-service' | Resolve-Path
+$RepoRoot   = Split-Path -Parent $PSScriptRoot
+$BackendDir = (Resolve-Path (Join-Path $RepoRoot 'backend')).Path
+$VoiceDir   = (Resolve-Path (Join-Path $RepoRoot 'voice-service')).Path
 
 function Wait-ForUrl($url, $timeoutSec = 120) {
   $deadline = (Get-Date).AddSeconds($timeoutSec)
@@ -32,30 +33,37 @@ function Wait-ForUrl($url, $timeoutSec = 120) {
 }
 
 # ---- 1. Model runtime ----
-Write-Host '[LAUNCH] Starting llama.cpp (Vulkan)...' -ForegroundColor Cyan
-if (-not (Test-Path $LlamaExe)) {
-  Write-Error ('llama-server.exe not found at ' + $LlamaExe + ' (set $env:LLAMA_SERVER_EXE)')
-  exit 1
-}
-$llamaArgs = @(
-  '--hf-repo', 'Qwen/Qwen3-VL-4B-Instruct-GGUF:Q4_K_M',
-  '--ctx-size', '2048', '--host', '127.0.0.1', '--port', '8080',
-  '--gpu-layers', '5', '--device', 'Vulkan1'
-)
-$llama = Start-Process -FilePath $LlamaExe -ArgumentList $llamaArgs -PassThru -WindowStyle Hidden
-Write-Host ('[LAUNCH] llama-server PID ' + $llama.Id)
-
-if (-not (Wait-ForUrl 'http://127.0.0.1:8080/health' 150)) {
-  Write-Warning 'llama.cpp did not become healthy in time. Check its logs. Continuing anyway.'
+if (Wait-ForUrl 'http://127.0.0.1:8080/health' 2) {
+  Write-Host '[LAUNCH] llama-server already running, skipping start.' -ForegroundColor Gray
+} else {
+  Write-Host '[LAUNCH] Starting llama.cpp (Vulkan)...' -ForegroundColor Cyan
+  if (-not (Test-Path $LlamaExe)) {
+    Write-Error ('llama-server.exe not found at ' + $LlamaExe + ' (set $env:LLAMA_SERVER_EXE)')
+    exit 1
+  }
+  $llamaArgs = @(
+    '--hf-repo', 'Qwen/Qwen3-VL-4B-Instruct-GGUF:Q4_K_M',
+    '--ctx-size', '2048', '--host', '127.0.0.1', '--port', '8080',
+    '--gpu-layers', '5', '--device', 'Vulkan1'
+  )
+  $llama = Start-Process -FilePath $LlamaExe -ArgumentList $llamaArgs -PassThru -WindowStyle Hidden
+  Write-Host ('[LAUNCH] llama-server PID ' + $llama.Id)
+  if (-not (Wait-ForUrl 'http://127.0.0.1:8080/health' 150)) {
+    Write-Warning 'llama.cpp did not become healthy in time. Check its logs. Continuing anyway.'
+  }
 }
 
 # ---- 2. Backend ----
-Write-Host '[LAUNCH] Starting backend (node src/server.js)...' -ForegroundColor Cyan
-$bp = Start-Process -FilePath 'node' -ArgumentList 'src/server.js' -WorkingDirectory $BackendDir -PassThru -WindowStyle Hidden
-Write-Host ('[LAUNCH] backend PID ' + $bp.Id)
-if (-not (Wait-ForUrl 'http://127.0.0.1:4000/health' 30)) {
-  Write-Error 'Backend failed to start. Check backend logs.'
-  exit 1
+if (Wait-ForUrl 'http://127.0.0.1:4000/health' 2) {
+  Write-Host '[LAUNCH] backend already running, skipping start.' -ForegroundColor Gray
+} else {
+  Write-Host '[LAUNCH] Starting backend (node src/server.js)...' -ForegroundColor Cyan
+  $bp = Start-Process -FilePath 'node' -ArgumentList 'src/server.js' -WorkingDirectory $BackendDir -PassThru -WindowStyle Hidden
+  Write-Host ('[LAUNCH] backend PID ' + $bp.Id)
+  if (-not (Wait-ForUrl 'http://127.0.0.1:4000/health' 30)) {
+    Write-Error 'Backend failed to start. Check backend logs.'
+    exit 1
+  }
 }
 $health = Invoke-RestMethod -Uri 'http://127.0.0.1:4000/health' -TimeoutSec 5
 Write-Host ('[LAUNCH] Backend up. gmail=' + $health.gmail) -ForegroundColor Green
