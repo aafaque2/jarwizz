@@ -5,7 +5,7 @@ routes each step to the right channel (web, Gmail, desktop, or the model itself)
 executes it with a safety approval gate, and speaks the result back.
 
 Everything runs on your machine: the model runtime is **llama.cpp (Vulkan)** serving
-**Qwen3-VL-4B (Q4_K_M)** — one open-weight model handles both planning *and* screen vision,
+**Qwen3-VL-8B (Q4_K_M)** — one open-weight model handles both planning *and* screen vision,
 no cloud account required for the core experience.
 
 ## What v1 does
@@ -38,14 +38,22 @@ voice-service (STT/TTS) ──WS/HTTP──▶ backend (planner + orchestrator +
 
 ## Quick start
 
-```powershell
-# 1. Start the model runtime + backend (Windows)
-.\scripts\start-jarwizz.ps1
+**Linux:**
+```bash
+# 1. Start the model runtime + backend
+./scripts/start-jarwizz.sh
 
-# 2. (optional) also launch the voice service in a new window
-.\scripts\start-jarwizz.ps1 -Voice
+# 2. (optional) also launch the voice service and the dashboard
+./scripts/start-jarwizz.sh --voice --ui
 
 # 3. Stop everything
+./scripts/stop-jarwizz.sh
+```
+
+**Windows:**
+```powershell
+.\scripts\start-jarwizz.ps1            # model + backend
+.\scripts\start-jarwizz.ps1 -Voice     # + voice service
 .\scripts\stop-jarwizz.ps1
 ```
 
@@ -54,7 +62,8 @@ hold **Ctrl+Shift**, say e.g. *"open notepad"*, *"what is my name"*,
 *"send an email to bob saying hello"*, or *"parse this job posting <url> and draft an application"*.
 
 Before first run, follow `docs/06-SETUP-GUIDE.md` to install llama.cpp (Vulkan), the model GGUF,
-Playwright, and the voice `venv`.
+Playwright, and the voice `venv`. On Linux start at **§9**, which covers the Wayland-specific
+pieces (portal screenshots, `ydotool`, evdev push-to-talk) the Windows sections don't.
 
 ## Documentation
 
