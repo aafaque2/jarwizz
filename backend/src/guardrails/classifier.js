@@ -21,6 +21,8 @@ const REVERSIBLE_ACTION_TYPES = new Set([
   'file_create',
   'app_open',
   'search_web',
+  'desktop_click',
+  'desktop_type',
 ]);
 
 const READ_ONLY_ACTION_TYPES = new Set([
@@ -28,6 +30,7 @@ const READ_ONLY_ACTION_TYPES = new Set([
   'gmail_read',
   'summarize',
   'answer_question',
+  'read_screen',
 ]);
 
 /**

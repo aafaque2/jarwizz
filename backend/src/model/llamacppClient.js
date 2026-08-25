@@ -297,6 +297,7 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
     'browser_open', 'browser_click', 'browser_type', 'browser_scroll', 'browser_read',
     'gmail_read', 'gmail_draft', 'gmail_send',
     'file_create', 'file_delete', 'app_open',
+    'read_screen', 'desktop_click', 'desktop_type',
     'summarize', 'answer_question',
   ];
   const IRREVERSIBLE = new Set(['gmail_send','file_delete','form_submit','app_submit','payment','account_settings_change','job_application_submit','unknown']);

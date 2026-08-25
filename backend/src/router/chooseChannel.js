@@ -20,8 +20,8 @@ function chooseChannel(step) {
     return 'llm';
   }
 
-  // Desktop channel — future phases
-  if (action_type.startsWith('desktop_') || action_type === 'app_open') {
+  // Desktop channel — native apps, file ops, screen reading (v2)
+  if (action_type.startsWith('desktop_') || action_type === 'app_open' || action_type.startsWith('file_') || action_type === 'read_screen') {
     return 'desktop';
   }
 

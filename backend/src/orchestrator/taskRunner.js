@@ -126,7 +126,31 @@ async function executeStep(step, sharedPages, conversationContext) {
     return { channel, output: { text }, screenshotBefore: null, screenshotAfter: null };
   }
 
-  // Desktop — future phases
+  if (channel === 'desktop') {
+    const p = step.payload || {};
+    const desktop = require('../automation/desktop/desktopRunner');
+    switch (step.action_type) {
+      case 'app_open':
+        return { channel, output: await desktop.openApp(p.target || p.app), screenshotBefore: null, screenshotAfter: null };
+      case 'read_screen': {
+        const shot = await desktop.takeScreenshot();
+        const result = await desktop.readScreen(p.query || p.prompt);
+        return { channel, output: { text: result.description }, screenshotBefore: null, screenshotAfter: null };
+      }
+      case 'desktop_click':
+        return { channel, output: await desktop.desktopClick(p.x ?? 640, p.y ?? 360), screenshotBefore: null, screenshotAfter: null };
+      case 'desktop_type':
+        return { channel, output: await desktop.desktopType(p.text), screenshotBefore: null, screenshotAfter: null };
+      case 'file_create':
+        return { channel, output: await desktop.createFile(p.path, p.content || ''), screenshotBefore: null, screenshotAfter: null };
+      case 'file_delete':
+        return { channel, output: await desktop.deleteFile(p.path), screenshotBefore: null, screenshotAfter: null };
+      default:
+        return { channel, output: { simulated: true }, screenshotBefore: null, screenshotAfter: null };
+    }
+  }
+
+  // Unknown — future phases
   return { channel, output: { simulated: true }, screenshotBefore: null, screenshotAfter: null };
 }
 
