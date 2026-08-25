@@ -23,6 +23,14 @@ export default function App() {
   const wsRef = useRef(null);
   const abortRef = useRef(null);
 
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') window.jarwizz?.hideDashboard();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Append an assistant message, deduping against recent assistant bubbles.
   // The reply arrives via BOTH the WS event and the HTTP response — without
   // this it renders twice. Time-boxed so identical consecutive answers

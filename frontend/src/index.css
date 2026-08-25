@@ -6,12 +6,13 @@
   --color-bg-panel-raised: #171d15;
   --color-bg-input: #0f1310;
 
-  --color-green-primary: #33FFA4;
-  --color-green-dim: #1f9e68;
-  --color-green-glow: rgba(51, 255, 164, 0.25);
-  --color-green-muted: #26382e;
+  --color-green-primary: #00FF66;
+  --color-green-dim: #14B854;
+  --color-green-glow: rgba(0, 255, 102, 0.30);
+  --color-green-muted: #12301f;
 
   --color-amber-approval: #E8B339;
+  --color-orange-alert: #FF7A18;
   --color-red-error: #E85B4E;
   --color-blue-info: #4EA8DE;
 
@@ -28,6 +29,12 @@ body {
   background-color: var(--color-bg-void);
   color: var(--color-text-primary);
   font-family: 'Inter', 'Space Grotesk', system-ui, sans-serif;
+}
+
+/* Transparent windows (orb) must not paint a background */
+html.route-transparent,
+html.route-transparent body {
+  background-color: transparent;
 }
 
 /* Theme-matched scrollbars */
