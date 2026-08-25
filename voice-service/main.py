@@ -408,23 +408,27 @@ def main():
     ):
         while True:
             set_state(STATE_IDLE)
-            print("\n[VOICE] Waiting for wake word...")
 
-            # Continuous wake-word detection
-            wake_detected = detect_wake_word(audio_q, oww)
-            if not wake_detected:
-                continue
+            if args.no_wake:
+                print("\n[VOICE] Listening for command (wake-word disabled)...")
+            else:
+                print("\n[VOICE] Waiting for wake word...")
 
-            # Woken!
-            set_state(STATE_WOKEN)
-            print("[VOICE] Woken! Recording command...")
-            try:
-                speak("")  # silence to trigger audio device
-            except Exception:
-                pass
+                # Continuous wake-word detection
+                wake_detected = detect_wake_word(audio_q, oww)
+                if not wake_detected:
+                    continue
 
-            # Discard buffered wake-word tail so it doesn't corrupt the command
-            flush_stale_audio(audio_q)
+                # Woken!
+                set_state(STATE_WOKEN)
+                print("[VOICE] Woken! Recording command...")
+                try:
+                    speak("")  # silence to trigger audio device
+                except Exception:
+                    pass
+
+                # Discard buffered wake-word tail so it doesn't corrupt the command
+                flush_stale_audio(audio_q)
 
             # Record command
             audio_np = record_command(audio_q)
