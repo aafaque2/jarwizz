@@ -365,7 +365,7 @@ def ws_listener():
 
 def main():
     parser = argparse.ArgumentParser(description="Jarwizz Voice Service")
-    parser.add_argument("--no-wake", action="store_true", help="Skip wake word, go straight to listening")
+    parser.add_argument("--wake", action="store_true", help="Enable wake-word detection (off by default in v1; train a custom model first)")
     parser.add_argument("--text", type=str, help="Send a text command directly (no voice)")
     parser.add_argument("--test-stop", action="store_true", help="Test stop phrase detection")
     args = parser.parse_args()
@@ -388,9 +388,13 @@ def main():
     ws_thread = threading.Thread(target=ws_listener, daemon=True)
     ws_thread.start()
 
-    # Init wake-word model
-    oww = init_wakeword()
-    print(f"[VOICE] Wake-word model loaded. Say 'Hey Jarvis' to start.")
+    # Init wake-word model only when enabled (v1 defaults to direct listening)
+    oww = None
+    if args.wake:
+        oww = init_wakeword()
+        print(f"[VOICE] Wake-word model loaded. Say 'Hey Jarvis' to start.")
+    else:
+        print(f"[VOICE] Direct-listen mode (v1). Speak a command any time.")
     set_state(STATE_IDLE)
 
     # Audio stream
@@ -409,7 +413,7 @@ def main():
         while True:
             set_state(STATE_IDLE)
 
-            if args.no_wake:
+            if args.wake:
                 print("\n[VOICE] Listening for command (wake-word disabled)...")
             else:
                 print("\n[VOICE] Waiting for wake word...")
