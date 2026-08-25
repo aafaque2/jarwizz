@@ -14,8 +14,8 @@ Get-CimInstance Win32_Process -Filter "name = 'node.exe'" | Where-Object {
 
 # Model runtime
 Get-Process -Name 'llama-server' -ErrorAction SilentlyContinue | ForEach-Object {
-  Write-Host "[STOP] killing llama-server PID $($_.ProcessId)"
-  Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+  Write-Host "[STOP] killing llama-server PID $($_.Id)"
+  Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
 }
 
 # Voice service (python main.py in voice-service)
