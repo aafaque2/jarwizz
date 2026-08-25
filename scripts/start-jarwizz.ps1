@@ -71,7 +71,7 @@ Write-Host ('[LAUNCH] Backend up. gmail=' + $health.gmail) -ForegroundColor Gree
 # ---- 3. Voice (optional) ----
 if ($Voice) {
   Write-Host '[LAUNCH] Starting voice service...' -ForegroundColor Cyan
-  $venvPy = Join-Path $VoiceDir 'venv' 'Scripts' 'python.exe'
+  $venvPy = Join-Path $VoiceDir 'venv' | Join-Path -ChildPath 'Scripts' | Join-Path -ChildPath 'python.exe'
   if (Test-Path $venvPy) {
     Start-Process -FilePath $venvPy -ArgumentList 'main.py' -WorkingDirectory $VoiceDir -PassThru
     Write-Host '[LAUNCH] Voice service window opened. Hold Ctrl+Shift to talk.' -ForegroundColor Green
