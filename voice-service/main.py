@@ -16,6 +16,16 @@ import numpy as np
 import sounddevice as sd
 import websocket  # websocket-client
 
+# ── Push-to-talk hotkey (Ctrl+Shift hold) ──
+try:
+    from pynput import keyboard as _pynput_keyboard
+    HAVE_PYNPUT = True
+except Exception:
+    HAVE_PYNPUT = False
+
+hotkey_event = threading.Event()  # set while the Ctrl+Shift combo is held
+_pressed_keys = set()
+
 # ── Paths ──
 SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
 STT_DIR = os.path.join(SERVICE_DIR, "stt")
@@ -181,6 +191,24 @@ def record_command(audio_stream):
     if not frames:
         return np.array([], dtype=np.float32)
 
+    return np.concatenate(frames)
+
+
+def record_while_held(audio_q, held_event, max_seconds=20):
+    """Hold-to-talk: record only while the push-to-talk combo is held.
+    Stops on key release (or max_seconds) — no silence-timeout truncation."""
+    flush_stale_audio(audio_q)
+    print("  Listening... (hold Ctrl+Shift, release to send)")
+    frames = []
+    start = time.time()
+    while held_event.is_set() and (time.time() - start) < max_seconds:
+        try:
+            data = audio_q.get(timeout=0.5)
+        except queue.Empty:
+            continue
+        frames.append(data)
+    if not frames:
+        return np.array([], dtype=np.float32)
     return np.concatenate(frames)
 
 
@@ -366,6 +394,7 @@ def ws_listener():
 def main():
     parser = argparse.ArgumentParser(description="Jarwizz Voice Service")
     parser.add_argument("--wake", action="store_true", help="Enable wake-word detection (off by default in v1; train a custom model first)")
+    parser.add_argument("--always", action="store_true", help="Continuous listening (no hotkey) — legacy mode")
     parser.add_argument("--text", type=str, help="Send a text command directly (no voice)")
     parser.add_argument("--test-stop", action="store_true", help="Test stop phrase detection")
     args = parser.parse_args()
@@ -393,7 +422,41 @@ def main():
     if args.wake:
         oww = init_wakeword()
         print(f"[VOICE] Wake-word model loaded. Say 'Hey Jarvis' to start.")
-    else:
+
+    # v1 default = push-to-talk (hold Ctrl+Shift). Always-listen is opt-in (--always).
+    hotkey_mode = (not args.wake and not args.always)
+
+    def _on_press(key):
+        try:
+            _pressed_keys.add(key.name if hasattr(key, "name") and key.name else str(key))
+        except Exception:
+            pass
+        ctrl = any(k in _pressed_keys for k in ("ctrl", "ctrl_l", "ctrl_r"))
+        shift = any(k in _pressed_keys for k in ("shift", "shift_l", "shift_r"))
+        if ctrl and shift:
+            hotkey_event.set()
+
+    def _on_release(key):
+        try:
+            _pressed_keys.discard(key.name if hasattr(key, "name") and key.name else str(key))
+        except Exception:
+            pass
+        ctrl = any(k in _pressed_keys for k in ("ctrl", "ctrl_l", "ctrl_r"))
+        shift = any(k in _pressed_keys for k in ("shift", "shift_l", "shift_r"))
+        if not (ctrl and shift):
+            hotkey_event.clear()
+
+    if hotkey_mode:
+        if HAVE_PYNPUT:
+            _hk = _pynput_keyboard.Listener(on_press=_on_press, on_release=_on_release)
+            _hk.daemon = True
+            _hk.start()
+            print("[VOICE] Push-to-talk: HOLD Ctrl+Shift, speak, RELEASE to send. (Not always listening.)")
+        else:
+            print("[VOICE] pynput missing — falling back to continuous listen. (pip install pynput)")
+            hotkey_mode = False
+
+    if not hotkey_mode and not args.wake:
         print(f"[VOICE] Direct-listen mode (v1). Speak a command any time.")
     set_state(STATE_IDLE)
 
@@ -431,11 +494,17 @@ def main():
 
                 # Discard buffered wake-word tail so it doesn't corrupt the command
                 flush_stale_audio(audio_q)
-            else:
-                print("\n[VOICE] Listening for command (wake-word disabled)...")
 
-            # Record command
-            audio_np = record_command(audio_q)
+                # Record command
+                audio_np = record_command(audio_q)
+            elif hotkey_mode:
+                set_state(STATE_IDLE)
+                print("\n[VOICE] Press & HOLD Ctrl+Shift to talk...")
+                hotkey_event.wait()
+                audio_np = record_while_held(audio_q, hotkey_event)
+            else:
+                print("\n[VOICE] Listening for command (continuous)...")
+                audio_np = record_command(audio_q)
 
             if len(audio_np) < SAMPLE_RATE * 0.5:
                 print("  [VOICE] Too short, ignoring.")
@@ -471,19 +540,31 @@ def main():
 
             # Summarize results
             steps = result.get("results", [])
-            completed = sum(1 for s in steps if s.get("status") == "completed")
-            errors = sum(1 for s in steps if s.get("status") == "error")
-            total = len(steps)
 
-            if errors:
-                speak(f"Done with {completed} of {total} steps, but there were {errors} errors.")
-            elif completed == total:
-                if total == 1:
-                    speak(f"Done: {steps[0].get('description', 'step complete')}.")
-                else:
-                    speak(f"All {total} steps completed successfully.")
+            # Speak the actual assistant answer when one was produced (greetings,
+            # Q&A, summaries) instead of a generic "Done: <step description>".
+            answer_text = None
+            for s in steps:
+                ot = (s.get("output") or {}).get("text")
+                if ot and s.get("action_type") in ("answer_question", "summarize", "llm"):
+                    answer_text = ot
+                    break
+            if answer_text:
+                speak(answer_text)
             else:
-                speak(f"Completed {completed} of {total} steps.")
+                completed = sum(1 for s in steps if s.get("status") == "completed")
+                errors = sum(1 for s in steps if s.get("status") == "error")
+                total = len(steps)
+
+                if errors:
+                    speak(f"Done with {completed} of {total} steps, but there were {errors} errors.")
+                elif completed == total:
+                    if total == 1:
+                        speak(f"Done: {steps[0].get('description', 'step complete')}.")
+                    else:
+                        speak(f"All {total} steps completed successfully.")
+                else:
+                    speak(f"Completed {completed} of {total} steps.")
 
             set_state(STATE_RESPONSE)
             time.sleep(0.5)

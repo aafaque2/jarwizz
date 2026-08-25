@@ -233,9 +233,8 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
     : `${systemContext}\nUser command: ${commandText}`;
   messages.push({ role: 'user', content: userMessage });
 
-  const content = await callLlamaCpp(messages, { temperature: 0.2 });
+  const content0 = await callLlamaCpp(messages, { temperature: 0.2 });
 
-  let plan;
   function repairTruncatedJson(str) {
     // Balance braces/brackets for truncated model output like {"steps": [...} missing final }
     let s = str.trim();
@@ -252,40 +251,58 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
     if (openBraces > closeBraces) s += '}'.repeat(openBraces - closeBraces);
     return s;
   }
-  try {
-    plan = JSON.parse(content);
-  } catch {
-    // Fix common model JSON errors: unescaped quotes in CSS selectors
-    // e.g. {"selector":"input[name="q"]} → {"selector":"input[name='q']"}
-    let fixed = content
-      .replace(/"selector"\s*:\s*"([^"]*?)"/gs, (_, val) => {
-        // Replace unescaped inner double quotes in selector values with single quotes
-        return `"selector": "${val.replace(/(?<=[=\[])"|"(?=[\]])/g, "'")}"`;
-      })
-      .replace(/"target"\s*:\s*"([^"]*?)"/gs, (_, val) => {
-        return `"target": "${val.replace(/(?<=[=\[])"|"(?=[\]])/g, "'")}"`;
-      });
 
-    // Also try: extract JSON from markdown code blocks
-    const jsonMatch = fixed.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) fixed = jsonMatch[1];
-
+  function parsePlanContent(content) {
+    let plan;
     try {
-      plan = JSON.parse(fixed);
+      plan = JSON.parse(content);
     } catch {
-      // Try repairing truncated JSON (missing closing } / ])
+      // Fix common model JSON errors: unescaped quotes in CSS selectors
+      // e.g. {"selector":"input[name="q"]} → {"selector":"input[name='q']}
+      let fixed = content
+        .replace(/"selector"\s*:\s*"([^"]*?)"/gs, (_, val) => {
+          return `"selector": "${val.replace(/(?<=[=\[])"|"(?=[\]])/g, "'")}"`;
+        })
+        .replace(/"target"\s*:\s*"([^"]*?)"/gs, (_, val) => {
+          return `"target": "${val.replace(/(?<=[=\[])"|"(?=[\]])/g, "'")}"`;
+        });
+
+      // Also try: extract JSON from markdown code blocks
+      const jsonMatch = fixed.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (jsonMatch) fixed = jsonMatch[1];
+
       try {
+        plan = JSON.parse(fixed);
+      } catch {
+        // Try repairing truncated JSON (missing closing } / ])
         const repaired = repairTruncatedJson(fixed);
         plan = JSON.parse(repaired);
-      } catch {
-        throw new Error(`Failed to parse model output as JSON: ${content.substring(0, 200)}`);
       }
     }
+    if (!plan.steps || !Array.isArray(plan.steps)) {
+      throw new Error(`Model output missing 'steps' array: ${content}`);
+    }
+    return plan;
   }
 
-  if (!plan.steps || !Array.isArray(plan.steps)) {
-    throw new Error(`Model output missing 'steps' array: ${content}`);
+  // Retry once — covers transient llama.cpp dropouts (fetch failed) and the
+  // occasional truncated-plan JSON. Second attempt varies temperature.
+  let plan;
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const content = attempt === 0
+        ? content0
+        : await callLlamaCpp(messages, { temperature: 0.45 });
+      plan = parsePlanContent(content);
+      lastErr = null;
+      break;
+    } catch (e) {
+      lastErr = e;
+      console.error(`[LLM] plan attempt ${attempt + 1} failed: ${e.message}`);
+    }
   }
+  if (lastErr) throw lastErr;
 
   // Drop malformed entries (model sometimes returns strings/null instead of objects)
   // — these previously crashed downstream code reading properties off undefined
