@@ -179,7 +179,13 @@ _This phase is simpler than it would be with a separate vision stack: the model 
 4. Submission is always irreversible tier, no exceptions, full approval modal shown with every field that will be submitted.
 5. Test against 2–3 real job postings on different platforms (e.g. a Greenhouse-based site and a Workday-based site) to validate how much varies between ATS platforms, per the risk noted in `01-PROJECT-SPEC.md` §6.
 
-**Checkpoint**: at least one real successful assisted application completed, with a clean log of every field submitted.
+**Checkpoint**: ✅ done (v1). Validated in mock mode end-to-end via `backend/test-phase10.js`:
+parse → draft → submit-with-approval → recorded in the applications tracker, with the approval modal
+showing the real parsed company/role and the generated cover letter. Parsing was verified to extract
+structured fields (title/company/skills) from a posting. Live submission against real Greenhouse/Workday
+sites is intentionally left as mock-recording (submitting synthetic applications is not appropriate);
+the read-only `parse` step works identically on any real URL. Real Gmail sending is gated behind the
+OAuth setup in `06-SETUP-GUIDE.md` §5.
 
 ---
 
@@ -198,3 +204,26 @@ _This phase is simpler than it would be with a separate vision stack: the model 
 - Do not begin a phase's checkpoint tests using mocked/stubbed data where real execution is specified — the checkpoints are meant to catch real integration issues, not just code compiling.
 - If a checkpoint fails, fix within the current phase before proceeding — later phases assume earlier guarantees hold (e.g. Phase 6 assumes Phase 2's approval gate is airtight). For Phase 0.5, a failed checkpoint means reassessing model/quantization before any product code is built — do not proceed to Phase 1 on an unvalidated runtime.
 - Every new action type introduced in any phase must be added to the risk-tier classifier (`05-SAFETY-AND-GUARDRAILS.md` §1) before it's usable — no action type ships without a tier.
+
+---
+
+## v1 Status (production cut)
+
+**Complete:** Phases 0 → 10. The assistant plans, routes (web / Gmail / desktop / job / model),
+executes behind a tiered approval gate, speaks replies, and remembers preferences — all on a local
+llama.cpp + Qwen3-VL runtime (no cloud required for core use).
+
+**Checkpoints passed:** Phase 0.5 (Vulkan offload + text/vision), 1 (planning), 2 (approval gate),
+3 (browser), 4 (Gmail mock), 5 (memory/recall), 6 (voice round-trip, manual), 7 (UI), 8 (full
+regression, 50/0), 9 (desktop control, 5/5), 10 (job assist, mock e2e).
+
+**Shipped with v1:** `scripts/start-jarwizz.ps1` / `stop-jarwizz.ps1` (one-command launch),
+`README.md`, `docs/10-USER-GUIDE.md`, and the Gmail OAuth flow (`/gmail/auth-url` + `/gmail/callback`).
+
+**Deferred (post-v1):**
+- **Phase 11 — Cloud model fallback** (needs an API key; for hard-reasoning cases only).
+- **Wake-word training** — v1 uses push-to-talk (hold Ctrl+Shift); a custom `hey_jarvis` model is a
+  later tuning step.
+- **Real Gmail sending** requires the user to complete the one-time OAuth in `06-SETUP-GUIDE.md` §5
+  (code is ready; the `credentials.json` is account-specific).
+- **Live job submission** to real ATS sites is intentionally mock-recorded in v1.

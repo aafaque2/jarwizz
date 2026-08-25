@@ -64,6 +64,10 @@ This test has two mandatory checks. Do not skip (a): a CPU-only llama.cpp build 
   --host 127.0.0.1 --port 8080
 # On Windows: .\build\bin\Release\llama-server.exe --model C:\models\qwen3-vl-4b-q4_k_m.gguf --vulkan --gpu-layers 99 --ctx-size 8192 --host 127.0.0.1 --port 8080
 ```
+> **Dev-machine note (AMD RX 5500M, 4 GB VRAM):** `--gpu-layers 99` **OOMs** on this GPU.
+> The validated config is `--gpu-layers 5 --device Vulkan1 --ctx-size 2048` (Vulkan1 = the discrete
+> AMD GPU; Vulkan0 is the integrated adapter). The launcher `scripts/start-jarwizz.ps1` uses this.
+> Pick the highest `--gpu-layers` that does **not** OOM on your GPU.
 
 **(a) Verify Vulkan is actually in use (not silently CPU-only):**
 - The server log on startup must mention `vulkan` / `Vulkan` and enumerate your GPU (e.g. `AMD Radeon RX 5500M` / `gfx1012`). If the log only mentions `cpu` or shows `0 layers offloaded`, the build is CPU-only — rebuild with `-DGGML_VULKAN=1` or use a known Vulkan-enabled binary.
@@ -179,12 +183,33 @@ node test-playwright.js
 npm install better-sqlite3 vectra
 ```
 
-## 5. Gmail API (free tier)
+## 5. Gmail API (free tier) — real email sending
 
-1. Google Cloud Console → new project → enable Gmail API.
-2. Create OAuth 2.0 credentials (Desktop app type).
-3. Download credentials JSON → store in `backend/secrets/` → add to `.gitignore`.
-4. `npm install googleapis`
+The backend already ships a full Gmail OAuth client (`backend/src/integrations/gmail/client.js`)
+with a `credentials.json` + `token.json` flow and a mock fallback when unconfigured.
+Follow these steps to connect **real** Gmail:
+
+1. **Google Cloud Console** → create a project → **Enable APIs & Services** → enable **Gmail API**.
+2. **APIs & Services → Credentials → Create Credentials → OAuth client ID**.
+   - Application type: **Desktop app**.
+   - Create, then **Download JSON**. Save it as `backend/secrets/credentials.json`.
+   - `backend/secrets/` is already in `.gitignore` (never commit `credentials.json` or `token.json`).
+3. Install the dependency (already in `package.json`): `npm install googleapis`.
+4. **Start the backend** (`node src/server.js`). It logs `[GMAIL] No token found — running in MOCK mode`
+   until you complete the one-time auth below.
+5. **One-time auth** (copies a code back):
+   ```bash
+   # Get the consent URL
+   curl http://localhost:4000/gmail/auth-url
+   # → open the "url" in a browser, sign in, grant access, copy the code
+   curl -X POST http://localhost:4000/gmail/callback -H "Content-Type: application/json" \
+        -d "{\"code\":\"PASTE_CODE_HERE\"}"
+   # → { "status": "connected" }
+   ```
+   The token is written to `backend/secrets/token.json` and the backend switches to real Gmail
+   (confirmed by `GET /health` → `"gmail":"connected"`).
+6. **Sending requires confirmation** — `gmail_send` is an *irreversible* tier, so the assistant
+   always pauses for your approval before any email goes out.
 
 Wire read/draft first, send-after-confirm second.
 
