@@ -25,6 +25,7 @@ except Exception:
 
 hotkey_event = threading.Event()  # set while the Ctrl+Shift combo is held
 _pressed_keys = set()
+VOICE_CHAT_ID = None  # stable chat session for conversational context
 
 # ── Paths ──
 SERVICE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -89,6 +90,7 @@ state_listeners.append(on_state_change)
 def speak(text):
     """Speak text using Piper TTS."""
     set_state(STATE_RESPONSE)
+    print(f"  [TTS] {text}")  # mirror the spoken reply to the terminal (cheap, no speed cost)
     try:
         from speak import speak_piper
         speak_piper(text)
@@ -214,14 +216,47 @@ def record_while_held(audio_q, held_event, max_seconds=20):
 
 # ── Backend communication ──
 
+def ensure_voice_chat():
+    """Create/reuse a stable 'Voice Session' chat so the assistant keeps
+    conversational context across voice commands."""
+    global VOICE_CHAT_ID
+    try:
+        with urllib.request.urlopen(f"{BACKEND_URL}/chats", timeout=10) as resp:
+            chats = json.loads(resp.read())
+        for c in chats:
+            if c.get("title") == "Voice Session":
+                VOICE_CHAT_ID = c["id"]
+                return
+    except Exception:
+        pass
+    try:
+        req = urllib.request.Request(
+            f"{BACKEND_URL}/chats",
+            data=json.dumps({"title": "Voice Session"}).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            chat = json.loads(resp.read())
+        VOICE_CHAT_ID = chat.get("id")
+        print(f"  [CHAT] Voice session: {VOICE_CHAT_ID}")
+    except Exception as e:
+        print(f"  [CHAT] Could not create voice chat: {e} (no context across turns)")
+
+
 def send_command(text):
-    """POST command to backend and return result."""
+    """POST command to backend and return result. Uses the chat-aware endpoint
+    when a voice session exists, so conversation context is preserved."""
     import urllib.request
     import urllib.error
 
+    if VOICE_CHAT_ID:
+        url = f"{BACKEND_URL}/chats/{VOICE_CHAT_ID}/command"
+    else:
+        url = f"{BACKEND_URL}/command"
     payload = json.dumps({"text": text}).encode()
     req = urllib.request.Request(
-        f"{BACKEND_URL}/command",
+        url,
         data=payload,
         headers={"Content-Type": "application/json"},
     )
@@ -416,6 +451,9 @@ def main():
     # Start WebSocket listener in background
     ws_thread = threading.Thread(target=ws_listener, daemon=True)
     ws_thread.start()
+
+    # Establish a stable voice chat session for conversational context
+    ensure_voice_chat()
 
     # Init wake-word model only when enabled (v1 defaults to direct listening)
     oww = None

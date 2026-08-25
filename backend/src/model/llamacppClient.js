@@ -153,7 +153,7 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
     _reply: text,
   });
 
-  // 1. GREETINGS (exact match — fast, no LLM)
+  // 1. GREETINGS (fast, no LLM)
   const greetings = {
     hello: 'Hello! How can I help you today?',
     hi: 'Hey there! What can I do for you?',
@@ -168,6 +168,15 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
     goodbye: 'Goodbye! Come back anytime.',
   };
   if (greetings[lowerCmd]) return replyStep(greetings[lowerCmd]);
+
+  // Loose greeting match — "hello there", "hey there", "hi everyone", etc.
+  // avoid sending chit-chat to the model (which can emit malformed plans -> 500)
+  const GREETING_WORDS = new Set(['hello', 'hi', 'hey', 'greetings', 'yo', 'sup', 'howdy', 'hiya']);
+  const GREETING_FILLER = new Set(['there', 'everyone', 'all', 'you', 'ya', '']);
+  const gTok = lowerCmd.replace(/[?!.,]/g, '').split(/\s+/).filter(Boolean);
+  if (gTok.length <= 4 && gTok.every(t => GREETING_WORDS.has(t) || GREETING_FILLER.has(t))) {
+    return replyStep('Hello! How can I help you today?');
+  }
 
   // 2. DATE / TIME (system clock — always accurate)
   const dateMatch = lowerCmd.replace(/[?!.,]/g, '').match(/\b(date|time|day|today|tomorrow|yesterday|clock|month|year)\b/);
@@ -302,7 +311,11 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
       console.error(`[LLM] plan attempt ${attempt + 1} failed: ${e.message}`);
     }
   }
-  if (lastErr) throw lastErr;
+  if (lastErr) {
+    // Graceful fallback instead of a hard 500 — keeps the voice flow alive
+    console.error(`[LLM] generatePlan failed after retries: ${lastErr.message}`);
+    return replyStep("Sorry, I didn't catch that clearly. Could you rephrase?", 'Ask user to rephrase');
+  }
 
   // Drop malformed entries (model sometimes returns strings/null instead of objects)
   // — these previously crashed downstream code reading properties off undefined
