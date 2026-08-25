@@ -27,10 +27,10 @@ sys.path.insert(0, TTS_DIR)
 
 # ── Config ──
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:4000")
-BACKEND_WS = os.environ.get("BACKEND_WS", "ws://localhost:4000")
+BACKEND_WS = os.environ.get("BACKEND_WS", "ws://localhost:4000/ws")
 SAMPLE_RATE = 16000
 CHUNK_SIZE = 1280  # 80ms
-WAKE_THRESHOLD = 0.5
+WAKE_THRESHOLD = 0.3
 SILENCE_THRESHOLD = 0.01
 SILENCE_TIMEOUT = 1.5  # seconds of silence to stop recording
 MAX_RECORD_SECONDS = 10

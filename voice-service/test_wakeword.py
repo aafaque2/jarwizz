@@ -9,7 +9,7 @@ from openwakeword.model import Model as OwwModel
 DURATION = 5
 SAMPLE_RATE = 16000
 CHUNK_SIZE = 1280  # 80ms chunks as recommended by openWakeWord
-THRESHOLD = 0.5
+THRESHOLD = 0.3
 
 print(f"Recording {DURATION}s — say 'hey jarvis' to test wake-word detection...")
 audio = sd.rec(int(DURATION * SAMPLE_RATE), samplerate=SAMPLE_RATE, channels=1, dtype="float32")
