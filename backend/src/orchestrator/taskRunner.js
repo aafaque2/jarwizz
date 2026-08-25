@@ -133,7 +133,8 @@ async function executeStep(step, sharedPages, conversationContext) {
       case 'app_open':
         return { channel, output: await desktop.openApp(p.target || p.app), screenshotBefore: null, screenshotAfter: null };
       case 'read_screen': {
-        const shot = await desktop.takeScreenshot();
+        // readScreen() captures internally — capturing again here would cost a
+        // second portal round-trip on Wayland for an image nothing reads.
         const result = await desktop.readScreen(p.query || p.prompt);
         return { channel, output: { text: result.description }, screenshotBefore: null, screenshotAfter: null };
       }
