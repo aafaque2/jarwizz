@@ -414,8 +414,6 @@ def main():
             set_state(STATE_IDLE)
 
             if args.wake:
-                print("\n[VOICE] Listening for command (wake-word disabled)...")
-            else:
                 print("\n[VOICE] Waiting for wake word...")
 
                 # Continuous wake-word detection
@@ -433,6 +431,8 @@ def main():
 
                 # Discard buffered wake-word tail so it doesn't corrupt the command
                 flush_stale_audio(audio_q)
+            else:
+                print("\n[VOICE] Listening for command (wake-word disabled)...")
 
             # Record command
             audio_np = record_command(audio_q)
