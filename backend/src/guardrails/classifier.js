@@ -23,6 +23,7 @@ const REVERSIBLE_ACTION_TYPES = new Set([
   'search_web',
   'desktop_click',
   'desktop_type',
+  'job_draft',
 ]);
 
 const READ_ONLY_ACTION_TYPES = new Set([
@@ -31,6 +32,7 @@ const READ_ONLY_ACTION_TYPES = new Set([
   'summarize',
   'answer_question',
   'read_screen',
+  'job_listing_parse',
 ]);
 
 /**

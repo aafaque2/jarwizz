@@ -19,6 +19,9 @@ ACTION TYPES (use exactly these):
 - file_delete: Delete a file. Payload: { "path": "..." }
 - app_open: Open an application. Payload: { "target": "app name" }
 - answer_question: Answer from knowledge or summarize. Payload: { "source": "llm", "query": "..." }
+- job_listing_parse: Parse a job posting URL into structured fields. Payload: { "url": "https://..." }
+- job_draft: Draft a tailored cover letter/email for a parsed listing. Payload: { "listing": { "title": "...", "company": "..." } } (listing may be empty {}; the assistant reuses the most recently parsed listing)
+- job_application_submit: Submit an application. ALWAYS irreversible — show every field in the approval modal. Payload: { "company": "...", "role": "...", "url": "...", "recipient_email": "...", "cover_letter": "..." }
 
 RISK TIERS (classify every step):
 - "read-only": Viewing, reading, searching, answering. Never modifies anything.
@@ -48,7 +51,10 @@ User: "what is the capital of France"
 {"steps":[{"description":"Answer user question","action_type":"answer_question","payload":{"source":"llm","query":"What is the capital of France?"},"tier":"read-only"}]}
 
 User: "open youtube and search for lo-fi beats"
-{"steps":[{"description":"Open YouTube","action_type":"browser_open","payload":{"url":"https://www.youtube.com"},"tier":"reversible"},{"description":"Search for lo-fi beats","action_type":"browser_type","payload":{"selector":"input#search","text":"lo-fi beats","url":"https://www.youtube.com"},"tier":"reversible"},{"description":"Submit search","action_type":"browser_click","payload":{"selector":"button#search-icon-legacy","url":"https://www.youtube.com"},"tier":"reversible"}]}`;
+{"steps":[{"description":"Open YouTube","action_type":"browser_open","payload":{"url":"https://www.youtube.com"},"tier":"reversible"},{"description":"Search for lo-fi beats","action_type":"browser_type","payload":{"selector":"input#search","text":"lo-fi beats","url":"https://www.youtube.com"},"tier":"reversible"},{"description":"Submit search","action_type":"browser_click","payload":{"selector":"button#search-icon-legacy","url":"https://www.youtube.com"},"tier":"reversible"}]}
+
+User: "parse this job posting https://jobs.example.com/swe and draft an application, then submit it"
+{"steps":[{"description":"Parse job posting","action_type":"job_listing_parse","payload":{"url":"https://jobs.example.com/swe"},"tier":"read-only"},{"description":"Draft tailored application","action_type":"job_draft","payload":{"listing":{}},"tier":"reversible"},{"description":"Submit application","action_type":"job_application_submit","payload":{"company":"Example Corp","role":"Software Engineer","url":"https://jobs.example.com/swe","recipient_email":"","cover_letter":""},"tier":"irreversible"}]}`;
 
 /**
  * Detect Gmail-related commands and build the correct plan directly.
@@ -107,6 +113,44 @@ function buildGmailPlan(cmd) {
   return null;
 }
 
+/**
+ * Detect job-application commands and build the plan directly (deterministic,
+ * like the Gmail intercept) — avoids relying on the model to emit the 3 job steps.
+ */
+function buildJobPlan(cmd) {
+  const { randomUUID } = require('crypto');
+  const sid = () => randomUUID();
+  const urlMatch = cmd.match(/(https?:\/\/[^\s'"]+|file:\/\/[^\s'"]+)/);
+  if (!urlMatch) return null;
+  if (!/(job|apply|application|posting|career|resume)/.test(cmd)) return null;
+  const url = urlMatch[0];
+  return {
+    steps: [
+      {
+        step_id: sid(),
+        description: 'Parse job posting',
+        action_type: 'job_listing_parse',
+        payload: { url },
+        tier: 'read-only',
+      },
+      {
+        step_id: sid(),
+        description: 'Draft tailored application',
+        action_type: 'job_draft',
+        payload: { listing: {} },
+        tier: 'reversible',
+      },
+      {
+        step_id: sid(),
+        description: 'Submit application',
+        action_type: 'job_application_submit',
+        payload: { company: '', role: '', url, recipient_email: '', cover_letter: '' },
+        tier: 'irreversible',
+      },
+    ],
+  };
+}
+
 async function callLlamaCpp(messages, extra = {}) {
   const url = `${LLAMACPP_URL.replace(/\/$/, '')}/v1/chat/completions`;
   const body = {
@@ -134,6 +178,47 @@ async function callLlamaCpp(messages, extra = {}) {
     || '';
   if (!content) throw new Error('Empty response from model runtime (llama.cpp + Qwen3-VL)');
   return content;
+}
+
+// ── Generic completion helpers (used by Phase 10 job-assist, etc.) ──
+
+function repairTruncatedJson(str) {
+  let s = str.trim();
+  const firstBrace = s.indexOf('{');
+  const lastBrace = s.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1) s = s.slice(firstBrace, lastBrace + 1);
+  const openBraces = (s.match(/{/g) || []).length;
+  const closeBraces = (s.match(/}/g) || []).length;
+  const openBrackets = (s.match(/\[/g) || []).length;
+  const closeBrackets = (s.match(/\]/g) || []).length;
+  if (openBrackets > closeBrackets) s += ']'.repeat(openBrackets - closeBrackets);
+  if (openBraces > closeBraces) s += '}'.repeat(openBraces - closeBraces);
+  return s;
+}
+
+async function complete(messages, opts = {}) {
+  return callLlamaCpp(messages, { temperature: opts.temperature ?? 0.3, max_tokens: opts.max_tokens ?? 1024, ...opts });
+}
+
+function parseJson(content) {
+  try {
+    return JSON.parse(content);
+  } catch {
+    let fixed = content;
+    const jsonMatch = fixed.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) fixed = jsonMatch[1];
+    try {
+      return JSON.parse(fixed);
+    } catch {
+      const repaired = repairTruncatedJson(fixed);
+      return JSON.parse(repaired);
+    }
+  }
+}
+
+async function completeJson(messages, opts = {}) {
+  const content = await complete(messages, opts);
+  return parseJson(content);
 }
 
 async function generatePlan(commandText, memoryContext = '', conversationContext = '') {
@@ -197,6 +282,10 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
   const gmailIntercept = buildGmailPlan(lowerCmd);
   if (gmailIntercept) return gmailIntercept;
 
+  // 3b. Job-application intercept (deterministic 3-step plan)
+  const jobIntercept = buildJobPlan(lowerCmd);
+  if (jobIntercept) return jobIntercept;
+
   // 4. Everything else goes to the model — no more intercepts
   let memoryContextStr = memoryContext || '';
   // Semantic recall requires an embedding round-trip per command; it evicts the
@@ -243,23 +332,6 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
   messages.push({ role: 'user', content: userMessage });
 
   const content0 = await callLlamaCpp(messages, { temperature: 0.2 });
-
-  function repairTruncatedJson(str) {
-    // Balance braces/brackets for truncated model output like {"steps": [...} missing final }
-    let s = str.trim();
-    // Extract first JSON object if wrapped in text/markdown
-    const firstBrace = s.indexOf('{');
-    const lastBrace = s.lastIndexOf('}');
-    if (firstBrace !== -1 && lastBrace !== -1) s = s.slice(firstBrace, lastBrace + 1);
-    // Count and append missing closings
-    const openBraces = (s.match(/{/g) || []).length;
-    const closeBraces = (s.match(/}/g) || []).length;
-    const openBrackets = (s.match(/\[/g) || []).length;
-    const closeBrackets = (s.match(/\]/g) || []).length;
-    if (openBrackets > closeBrackets) s += ']'.repeat(openBrackets - closeBrackets);
-    if (openBraces > closeBraces) s += '}'.repeat(openBraces - closeBraces);
-    return s;
-  }
 
   function parsePlanContent(content) {
     let plan;
@@ -328,6 +400,7 @@ async function generatePlan(commandText, memoryContext = '', conversationContext
     'gmail_read', 'gmail_draft', 'gmail_send',
     'file_create', 'file_delete', 'app_open',
     'read_screen', 'desktop_click', 'desktop_type',
+    'job_listing_parse', 'job_draft', 'job_application_submit',
     'summarize', 'answer_question',
   ];
   const IRREVERSIBLE = new Set(['gmail_send','file_delete','form_submit','app_submit','payment','account_settings_change','job_application_submit','unknown']);
@@ -454,4 +527,4 @@ async function describeScreen(imageBuffer, prompt = "Describe what's visible on 
   return content.trim();
 }
 
-module.exports = { generatePlan, describeScreen, LLAMACPP_URL, MODEL_PATH };
+module.exports = { generatePlan, describeScreen, complete, completeJson, parseJson, LLAMACPP_URL, MODEL_PATH };

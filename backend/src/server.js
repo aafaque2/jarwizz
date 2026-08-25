@@ -10,7 +10,7 @@ const { requestStop, runPlan, approveStep, rejectStep, cancelPendingApprovals, s
 const { readLogs } = require('./guardrails/logger');
 const { isWhitelisted, addToWhitelist, loadWhitelist } = require('./guardrails/whitelist');
 const { initGmail, getAuthUrl, completeAuth, isMockMode } = require('./integrations/gmail/client');
-const { setPreference, getPreference, getAllPreferences, deletePreference, getRecentTasks, closeDb, listChats, createChat, getChat, renameChat, deleteChat, addMessage, getRecentMessages } = require('./memory/store');
+const { setPreference, getPreference, getAllPreferences, deletePreference, getRecentTasks, closeDb, listChats, createChat, getChat, renameChat, deleteChat, addMessage, getRecentMessages, getJobProfile, setJobProfile, listApplications } = require('./memory/store');
 
 const app = express();
 app.use(cors());
@@ -168,6 +168,22 @@ app.post('/preferences', (req, res) => {
 app.delete('/preferences/:key', (req, res) => {
   deletePreference(req.params.key);
   res.json({ status: 'deleted', key: req.params.key });
+});
+
+// ── Phase 10: Job-seeker profile + applications ──
+app.get('/job/profile', (req, res) => {
+  res.json(getJobProfile());
+});
+
+app.post('/job/profile', (req, res) => {
+  const { key, value } = req.body;
+  if (!key || value === undefined) return res.status(400).json({ error: 'Missing key or value' });
+  setJobProfile(key, value);
+  res.json({ status: 'set', key, value });
+});
+
+app.get('/job/applications', (req, res) => {
+  res.json(listApplications());
 });
 
 // ── Memory / Task History ──

@@ -150,6 +150,31 @@ async function executeStep(step, sharedPages, conversationContext) {
     }
   }
 
+  if (channel === 'job') {
+    const p = step.payload || {};
+    const job = require('../automation/job/jobRunner');
+    switch (step.action_type) {
+      case 'job_listing_parse': {
+        const listing = await job.parseListing(p.url);
+        return { channel, output: { listing }, screenshotBefore: null, screenshotAfter: null };
+      }
+      case 'job_draft': {
+        const listing = p.listing || {};
+        const cover = await job.draftApplication(listing, p.notes);
+        return { channel, output: { cover_letter: cover }, screenshotBefore: null, screenshotAfter: null };
+      }
+      case 'job_application_submit': {
+        const res = await job.submitApplication({
+          company: p.company, role: p.role, url: p.url,
+          recipient_email: p.recipient_email, cover_letter: p.cover_letter,
+        });
+        return { channel, output: res, screenshotBefore: null, screenshotAfter: null };
+      }
+      default:
+        return { channel, output: { simulated: true }, screenshotBefore: null, screenshotAfter: null };
+    }
+  }
+
   // Unknown — future phases
   return { channel, output: { simulated: true }, screenshotBefore: null, screenshotAfter: null };
 }
@@ -196,6 +221,7 @@ async function runPlan(plan, broadcast) {
   const taskId = randomUUID();
   const results = [];
   const sharedPages = {};
+  const jobContext = {}; // threads parsed listing / drafted letter across job steps
 
   for (let i = 0; i < classified.steps.length; i++) {
     if (isStopped()) {
@@ -217,10 +243,20 @@ async function runPlan(plan, broadcast) {
 
     // Approval gate for irreversible steps
     if (step.tier === 'irreversible') {
+      // For job submission, fill the modal with real fields threaded from prior steps
+      // (plan placeholders are empty strings — fill them from jobContext, don't overwrite)
+      const approvalStepPayload = (() => {
+        if (step.action_type !== 'job_application_submit') return step.payload;
+        const merged = { ...step.payload };
+        for (const k of ['company', 'role', 'url', 'recipient_email', 'cover_letter']) {
+          if (!merged[k]) merged[k] = jobContext[k];
+        }
+        return merged;
+      })();
       const approvalPayload = {
         task_id: taskId, step_id: step.step_id, step_index: i,
         description: step.description, action_type: step.action_type,
-        tier: step.tier, payload: step.payload,
+        tier: step.tier, payload: approvalStepPayload,
         whitelist_override: step.whitelist_override || false,
       };
       if (broadcast) broadcast('pending_approval', approvalPayload);
@@ -255,11 +291,21 @@ async function runPlan(plan, broadcast) {
       }
     }
 
-    // Execute the step
+    // Execute the step (thread job context into draft/submit payloads)
+    let execStep = step;
+    if (step.action_type === 'job_draft' && (!step.payload.listing || !Object.keys(step.payload.listing || {}).length) && jobContext.listing) {
+      execStep = { ...step, payload: { ...step.payload, listing: jobContext.listing } };
+    } else if (step.action_type === 'job_application_submit') {
+      const merged = { ...step.payload };
+      for (const k of ['company', 'role', 'url', 'recipient_email', 'cover_letter']) {
+        if (!merged[k]) merged[k] = jobContext[k];
+      }
+      execStep = { ...step, payload: merged };
+    }
     try {
-      const execResult = await executeStep(step, sharedPages, classified._conversationContext || '');
+      const execResult = await executeStep(execStep, sharedPages, classified._conversationContext || '');
       const stepResult = {
-        step_id: step.step_id, step_index: i, ...step,
+        step_id: step.step_id, step_index: i, ...execStep,
         status: 'completed',
         approval_status: step.tier === 'irreversible' ? 'approved' : 'auto',
         channel: execResult.channel,
@@ -271,6 +317,17 @@ async function runPlan(plan, broadcast) {
       results.push(stepResult);
       logAction({ task_id: taskId, ...stepResult, result: 'success' });
       if (broadcast) broadcast('step_completed', stepResult);
+      // Capture job context for downstream steps
+      if (step.action_type === 'job_listing_parse' && execResult.output?.listing) {
+        jobContext.listing = execResult.output.listing;
+      } else if (step.action_type === 'job_draft' && execResult.output?.cover_letter) {
+        jobContext.cover_letter = execResult.output.cover_letter;
+        if (jobContext.listing) {
+          jobContext.company = jobContext.listing.company;
+          jobContext.role = jobContext.listing.title;
+          jobContext.url = jobContext.listing.url;
+        }
+      }
     } catch (err) {
       const errResult = {
         step_id: step.step_id, step_index: i, ...step,

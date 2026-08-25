@@ -33,6 +33,20 @@ function getDb() {
         created_at TEXT DEFAULT (datetime('now')),
         updated_at TEXT DEFAULT (datetime('now'))
       );
+      CREATE TABLE IF NOT EXISTS job_profile (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL,
+        updated_at TEXT DEFAULT (datetime('now'))
+      );
+      CREATE TABLE IF NOT EXISTS applications (
+        id TEXT PRIMARY KEY,
+        company TEXT,
+        role TEXT,
+        url TEXT,
+        status TEXT DEFAULT 'drafted',
+        cover_letter TEXT,
+        submitted_at TEXT DEFAULT (datetime('now'))
+      );
       CREATE TABLE IF NOT EXISTS messages (
         id TEXT PRIMARY KEY,
         chat_id TEXT NOT NULL,
@@ -212,6 +226,45 @@ function getRecentTasks(limit = 10) {
   return d.prepare('SELECT * FROM task_history ORDER BY timestamp DESC LIMIT ?').all(limit);
 }
 
+// ── Job-seeker profile (Phase 10) ──
+
+function getJobProfile() {
+  const d = getDb();
+  return d.prepare('SELECT * FROM job_profile').all();
+}
+
+function getJobProfileField(key) {
+  const d = getDb();
+  const row = d.prepare('SELECT value FROM job_profile WHERE key = ?').get(key);
+  return row ? row.value : null;
+}
+
+function setJobProfile(key, value) {
+  const d = getDb();
+  d.prepare('INSERT OR REPLACE INTO job_profile (key, value) VALUES (?, ?)').run(key, value);
+}
+
+function deleteJobProfile(key) {
+  const d = getDb();
+  d.prepare('DELETE FROM job_profile WHERE key = ?').run(key);
+}
+
+// ── Applications tracking (Phase 10) ──
+
+function addApplication(app) {
+  const d = getDb();
+  const id = randomUUID();
+  d.prepare(
+    'INSERT INTO applications (id, company, role, url, status, cover_letter) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(id, app.company || null, app.role || null, app.url || null, app.status || 'drafted', app.cover_letter || null);
+  return id;
+}
+
+function listApplications() {
+  const d = getDb();
+  return d.prepare('SELECT * FROM applications ORDER BY submitted_at DESC').all();
+}
+
 function closeDb() {
   if (db) { db.close(); db = null; }
 }
@@ -220,4 +273,6 @@ module.exports = {
   getDb, setPreference, getPreference, getAllPreferences, deletePreference,
   storeTaskHistory, recallRelevant, getRecentTasks, closeDb,
   listChats, createChat, getChat, renameChat, deleteChat, addMessage, getRecentMessages,
+  getJobProfile, getJobProfileField, setJobProfile, deleteJobProfile,
+  addApplication, listApplications,
 };

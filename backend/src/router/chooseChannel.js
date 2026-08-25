@@ -25,6 +25,11 @@ function chooseChannel(step) {
     return 'desktop';
   }
 
+  // Job-assist channel (v2) — listing parse, drafting, submission
+  if (action_type.startsWith('job_')) {
+    return 'job';
+  }
+
   // Default: browser automation
   return 'browser';
 }
