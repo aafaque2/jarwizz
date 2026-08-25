@@ -52,6 +52,15 @@ function deleteReq(url) {
   });
 }
 
+// The voice venv lives at venv/Scripts/python.exe on Windows and venv/bin/python
+// everywhere else.
+function venvPython() {
+  const venv = path.join(__dirname, '..', 'voice-service', 'venv');
+  return process.platform === 'win32'
+    ? path.join(venv, 'Scripts', 'python.exe')
+    : path.join(venv, 'bin', 'python');
+}
+
 async function test(name, fn) {
   console.log(`\nTEST: ${name}`);
   try {
@@ -563,7 +572,7 @@ console.log('\n=== SECTION 10: VOICE SERVICE ===');
 
 await test('TTS: Piper speaks text', async () => {
   const { execSync } = require('child_process');
-  const py = path.join(__dirname, '..', 'voice-service', 'venv', 'Scripts', 'python.exe');
+  const py = venvPython();
   const script = path.join(__dirname, '..', 'voice-service', 'tts', 'speak.py');
   execSync(`"${py}" "${script}" "Phase 8 validation"`, { timeout: 15000, stdio: 'pipe' });
   ok('TTS synthesis completed');
@@ -571,7 +580,7 @@ await test('TTS: Piper speaks text', async () => {
 
 await test('Voice --text: navigate command', async () => {
   const { execSync } = require('child_process');
-  const py = path.join(__dirname, '..', 'voice-service', 'venv', 'Scripts', 'python.exe');
+  const py = venvPython();
   const script = path.join(__dirname, '..', 'voice-service', 'main.py');
   try {
     execSync(`"${py}" "${script}" --text "open example.com"`, { timeout: 45000, stdio: 'pipe' });

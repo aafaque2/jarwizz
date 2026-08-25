@@ -48,8 +48,10 @@ async function sendCmd(text) {
   console.log('TEST 1: app_open "open notepad"');
   const r1 = await sendCmd('open notepad');
   const s1 = r1.results.find(r => r.action_type === 'app_open');
-  if (s1?.status === 'completed' && s1.output?.opened === 'notepad') {
-    console.log(`  PASS: notepad opened (tier: ${s1.tier}, approval: ${s1.approval_status})\n`);
+  // On Linux "notepad" is resolved through the alias table to whatever editor is
+  // installed, so assert something was opened rather than the literal name.
+  if (s1?.status === 'completed' && s1.output?.opened) {
+    console.log(`  PASS: ${s1.output.opened} opened (tier: ${s1.tier}, approval: ${s1.approval_status})\n`);
     passed++;
   } else { console.log(`  FAIL: ${JSON.stringify(s1).slice(0, 200)}\n`); }
 
@@ -112,8 +114,12 @@ async function sendCmd(text) {
     } else { console.log(`  FAIL: tier=${approval.tier} action=${approval.action_type}\n`); }
   } catch (err) { console.log(`  FAIL: ${err.message}\n`); }
 
-  // Cleanup notepad
-  try { require('child_process').execSync('taskkill /IM notepad.exe /F', { stdio: 'ignore' }); } catch {}
+  // Cleanup the editor opened by TEST 1
+  try {
+    const { execSync } = require('child_process');
+    if (process.platform === 'win32') execSync('taskkill /IM notepad.exe /F', { stdio: 'ignore' });
+    else execSync('pkill -f "gnome-text-editor|gedit|kate" || true', { stdio: 'ignore' });
+  } catch {}
 
   // LOG VERIFICATION
   console.log('--- LOG VERIFICATION ---');
