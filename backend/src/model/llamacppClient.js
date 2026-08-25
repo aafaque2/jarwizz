@@ -1,8 +1,12 @@
 const { recallRelevant } = require('../memory/store');
 
 const LLAMACPP_URL = process.env.LLAMACPP_URL || 'http://127.0.0.1:8080';
-const LLAMACPP_MODEL = process.env.LLAMACPP_MODEL || 'qwen3-vl-4b';
-const MODEL_PATH = process.env.MODEL_PATH || 'C:\\models\\qwen3-vl-4b-q4_k_m.gguf';
+const LLAMACPP_MODEL = process.env.LLAMACPP_MODEL || 'qwen3-vl-8b';
+// Informational only — llama-server is started separately with its own --model.
+// backend/.env sets the real path; this is just a sane per-platform default.
+const MODEL_PATH = process.env.MODEL_PATH || (process.platform === 'win32'
+  ? 'C:\\models\\Qwen3VL-8B-Instruct-Q4_K_M.gguf'
+  : require('path').join(require('os').homedir(), 'models', 'Qwen3VL-8B-Instruct-Q4_K_M.gguf'));
 
 const SYSTEM_PROMPT = `You are Jarwizz, a voice-activated AI assistant. Given a user command, create a plan of discrete steps.
 
@@ -18,6 +22,9 @@ ACTION TYPES (use exactly these):
 - file_create: Create a file. Payload: { "path": "...", "content": "..." }
 - file_delete: Delete a file. Payload: { "path": "..." }
 - app_open: Open an application. Payload: { "target": "app name" }
+- read_screen: Look at the user's screen and describe it. Use for "what's on my screen", "read my screen", "what am I looking at". Payload: { "query": "what to look for" }
+- desktop_click: Click at screen coordinates in a native app. Payload: { "x": 640, "y": 360 }
+- desktop_type: Type text into the currently focused window. Payload: { "text": "text to type" }
 - answer_question: Answer from knowledge or summarize. Payload: { "source": "llm", "query": "..." }
 - job_listing_parse: Parse a job posting URL into structured fields. Payload: { "url": "https://..." }
 - job_draft: Draft a tailored cover letter/email for a parsed listing. Payload: { "listing": { "title": "...", "company": "..." } } (listing may be empty {}; the assistant reuses the most recently parsed listing)
@@ -46,6 +53,9 @@ User: "read my last 5 emails"
 
 User: "draft an email to john@example.com saying meeting tomorrow at 3pm"
 {"steps":[{"description":"Draft email to john@example.com","action_type":"gmail_draft","payload":{"to":"john@example.com","subject":"Meeting","body":"Hi John, just wanted to let you know we have a meeting scheduled for tomorrow at 3pm."},"tier":"reversible"}]}
+
+User: "what is on my screen"
+{"steps":[{"description":"Read the user's screen","action_type":"read_screen","payload":{"query":"Describe the windows, apps and visible text on screen."},"tier":"read-only"}]}
 
 User: "what is the capital of France"
 {"steps":[{"description":"Answer user question","action_type":"answer_question","payload":{"source":"llm","query":"What is the capital of France?"},"tier":"read-only"}]}
