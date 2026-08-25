@@ -10,7 +10,7 @@ MODEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")
 # Default voice: en_GB-northern_english_male — a deep, calm British male voice
 # (closest offline Piper match to a "Jarvis" tone). Override with the JARWIZZ_VOICE
 # env var (e.g. en_US-lessac-medium.onnx, or en_US-arctic-medium.onnx for a US male).
-DEFAULT_MODEL = os.environ.get("JARWIZZ_VOICE", "en_GB-northern_english_male-medium.onnx")
+DEFAULT_MODEL = os.environ.get("JARWIZZ_VOICE", "en_US-bryce-medium.onnx")
 _model = None
 
 
