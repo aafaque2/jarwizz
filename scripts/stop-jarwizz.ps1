@@ -26,4 +26,21 @@ Get-CimInstance Win32_Process -Filter "name = 'python.exe'" | Where-Object {
   Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
 }
 
+# Dashboard: vite dev server under this repo's frontend/
+Get-CimInstance Win32_Process -Filter "name = 'node.exe'" | Where-Object {
+  $_.CommandLine -like '*vite*' -and $_.CommandLine -like '*frontend*'
+} | ForEach-Object {
+  Write-Host "[STOP] killing dashboard PID $($_.ProcessId)"
+  Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+}
+
+# Desktop shell (Electron) launched from this repo's frontend
+Get-CimInstance Win32_Process | Where-Object {
+  $_.Name -in @('electron.exe', 'Jarwizz.exe') -and
+  $_.CommandLine -like '*frontend*electron*'
+} | ForEach-Object {
+  Write-Host "[STOP] killing desktop shell PID $($_.ProcessId)"
+  Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+}
+
 Write-Host '[STOP] Done.' -ForegroundColor Green
