@@ -1,8 +1,13 @@
 # Jarwizz — UI Design System
 
 Aesthetic direction: dark "AI core" / control-room feel, rich green as the
-signature accent — think a calm, high-tech instrument panel, not a neon
-hacker cliché. Confident and quiet, not loud.
+signature accent — a calm, high-tech instrument panel. Confident and quiet.
+
+> **Scope note:** the color tokens, typography, motion rules, and component
+> specs in this document remain authoritative. The single-window layout in §5
+> is superseded by `11-PRO-UI-PLAN.md`, which defines the current three-layer
+> architecture (orb presence / command dashboard / intercept gateway) and an
+> updated token set (§2 there).
 
 ## 1. Color tokens
 

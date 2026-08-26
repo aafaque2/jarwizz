@@ -5,15 +5,29 @@ day-to-day usage guide.
 
 ## 1. Start Jarwizz
 
-From the repo root (Windows PowerShell):
+**Windows** (PowerShell, from the repo root):
 
 ```powershell
 .\scripts\start-jarwizz.ps1            # model runtime + backend
 .\scripts\start-jarwizz.ps1 -Voice     # also opens the voice service window
 ```
 
-`start-jarwizz.ps1` launches llama.cpp (Vulkan, Qwen3-VL-4B) on port 8080 and the backend on 4000,
+`start-jarwizz.ps1` starts llama.cpp on port 8080 and the backend on 4000,
 and waits for both to be healthy. Stop with `.\scripts\stop-jarwizz.ps1`.
+
+**Linux:**
+
+```bash
+./scripts/start-jarwizz.sh              # model runtime + backend
+./scripts/start-jarwizz.sh --voice --ui # + voice service and dashboard
+./scripts/stop-jarwizz.sh
+```
+
+Services run detached with logs in `.run/`; the launcher opens a tmux window
+with one live pane per service (see `docs/06-SETUP-GUIDE.md` §9g).
+
+The model served depends on your hardware — the launchers read `backend/.env`.
+See `docs/06-SETUP-GUIDE.md` §1b for recommendations.
 
 The dashboard (chat UI) is the Vite dev server in `frontend/` — run it separately if you want the
 visual interface.
@@ -98,12 +112,17 @@ By default Gmail is **mock**. To send real email:
 
 ## 7. Troubleshooting
 
-- **Model won't start / CPU-only:** confirm llama.cpp was built with `-DGGML_VULKAN=1` and the server
-  log shows `vulkan` + your GPU. On the dev machine use `--gpu-layers 5 --device Vulkan1`
-  (more layers OOM the 4 GB GPU).
+- **Model won't start / CPU-only:** confirm llama.cpp was built with GPU support
+  (`-DGGML_VULKAN=1`, or ROCm/HIP where available) and the server log shows your
+  GPU. Choose the highest `--gpu-layers` value that does not run out of memory
+  (see `docs/06-SETUP-GUIDE.md` §1c and §9g).
 - **Voice not hearing you:** run `python test_mic.py` in `voice-service/` — if amplitude is ~0, select
-  the right mic in Windows sound settings.
-- **"fetch failed" from voice:** the model runtime died — restart with `start-jarwizz.ps1`.
+  the right mic in your system's sound settings.
+- **"fetch failed" from voice:** the model runtime died — restart with the launcher script.
 - **Gmail still mock:** you skipped §6, or `token.json` isn't in `backend/secrets/`.
+- **Push-to-talk not firing (Linux/Wayland):** pynput cannot see keys on Wayland;
+  the evdev backend needs your user in the `input` group
+  (`sudo usermod -aG input "$USER"`, then log out and back in). Verify with
+  `voice-service/venv/bin/python voice-service/hotkey.py`.
 - **Wake word not triggering:** v1 defaults to push-to-talk (Ctrl+Shift). Wake-word training is a
   post-v1 item; run `python main.py --wake` only after training a custom model.

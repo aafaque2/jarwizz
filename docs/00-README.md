@@ -1,26 +1,29 @@
 # Jarwizz — Personal AI Assistant — Doc Index
 
-This folder is the complete spec for **Jarwizz**, a voice-activated, locally-run
-personal AI assistant. Read/feed to opencode in this order:
+This folder is the complete specification for **Jarwizz**, a voice-activated,
+locally-run personal AI assistant.
 
 | # | File | What it covers |
 |---|---|---|
-| 1 | `01-PROJECT-SPEC.md` | What Jarwizz actually is, in plain language. Full feature list, goals, non-goals. |
+| 1 | `01-PROJECT-SPEC.md` | Product definition: feature list, goals, non-goals, success criteria. |
 | 2 | `02-ARCHITECTURE.md` | System design, components, routing logic, folder structure. |
-| 3 | `03-VOICE-INTERFACE.md` | Wake word ("Jarwizz, wake up"), speech-to-text, text-to-speech pipeline. |
-| 4 | `04-UI-DESIGN-SYSTEM.md` | Dark theme + rich green visual identity, component specs. |
-| 5 | `05-SAFETY-AND-GUARDRAILS.md` | Approval tiers, logging, kill switch, voice confirmation flow. |
-| 6 | `06-SETUP-GUIDE.md` | Exact commands to install the full free local stack. |
-| 7 | `07-IMPLEMENTATION-PLAN.md` | **The build plan.** Chronological, phase-by-phase, step-by-step. Give this to opencode as the primary task list. |
-| 8 | `08-FUTURE-SCOPE.md` | Ideas to research later, once MVP is stable. Not for v1. |
+| 3 | `03-VOICE-INTERFACE.md` | Voice pipeline: wake word, push-to-talk, STT, TTS. |
+| 4 | `04-UI-DESIGN-SYSTEM.md` | Visual identity, design tokens, core component specs. |
+| 5 | `05-SAFETY-AND-GUARDRAILS.md` | Approval tiers, action logging, kill switch, voice confirmation. |
+| 6 | `06-SETUP-GUIDE.md` | Installation for Windows and Linux (Arch/GNOME Wayland), model selection by hardware. |
+| 7 | `07-IMPLEMENTATION-PLAN.md` | Chronological build plan with phase checkpoints; v1 status included. |
+| 8 | `08-FUTURE-SCOPE.md` | Post-v1 ideas under consideration; not committed. |
+| 9 | `09-MIGRATION-NOTES.md` | Historical record of the Ollama → llama.cpp migration. |
+| 10 | `10-USER-GUIDE.md` | Day-to-day operation: starting services, voice commands, approvals, troubleshooting. |
+| 11 | `11-PRO-UI-PLAN.md` | Approved plan for the three-layer UI (orb / dashboard / approval gateway). |
 
-## How to use this with opencode
+Supporting material: `phase-0.5-validation.md` records the model-runtime
+validation results for the original development machine.
 
-1. Drop this whole `docs/` folder into the root of your empty project repo.
-2. Start opencode in that repo.
-3. Point it at `07-IMPLEMENTATION-PLAN.md` and tell it to execute Phase 0 → Phase 1
-   → ... in order, checking off each numbered step. It should read
-   `02-ARCHITECTURE.md`, `04-UI-DESIGN-SYSTEM.md`, and `05-SAFETY-AND-GUARDRAILS.md`
-   as reference whenever a step touches those areas.
-4. Do not let it skip ahead to later phases before earlier "checkpoint" tests
-   pass — each phase's checkpoint is a gate, not a suggestion.
+## How to use this with an AI coding agent
+
+1. Place this `docs/` folder at the root of the project repository.
+2. Point the agent at `07-IMPLEMENTATION-PLAN.md` and have it execute phases in
+   order, using `02-ARCHITECTURE.md`, `04-UI-DESIGN-SYSTEM.md`, and
+   `05-SAFETY-AND-GUARDRAILS.md` as references where steps touch those areas.
+3. Treat each phase checkpoint as a gate: do not proceed until it passes.
