@@ -84,7 +84,7 @@ async function executeStep(step, sharedPages, conversationContext) {
   if (channel === 'llm') {
     const p = step.payload || {};
     const LLAMACPP_URL = process.env.LLAMACPP_URL || 'http://127.0.0.1:8080';
-    const LLAMACPP_MODEL = process.env.LLAMACPP_MODEL || 'qwen3-vl-4b';
+    const LLAMACPP_MODEL = process.env.LLAMACPP_MODEL || 'local-vlm';
 
     // Inject stored preferences so questions like "what is my email" recall from memory
     let prefContext = '';

@@ -1,12 +1,15 @@
 const { recallRelevant } = require('../memory/store');
 
 const LLAMACPP_URL = process.env.LLAMACPP_URL || 'http://127.0.0.1:8080';
-const LLAMACPP_MODEL = process.env.LLAMACPP_MODEL || 'qwen3-vl-8b';
+// Label sent in the "model" field — llama.cpp serves whatever GGUF it was
+// started with and ignores this, so it stays deliberately generic. Set
+// LLAMACPP_MODEL in backend/.env if you want it to match your actual model.
+const LLAMACPP_MODEL = process.env.LLAMACPP_MODEL || 'local-vlm';
 // Informational only — llama-server is started separately with its own --model.
 // backend/.env sets the real path; this is just a sane per-platform default.
 const MODEL_PATH = process.env.MODEL_PATH || (process.platform === 'win32'
-  ? 'C:\\models\\Qwen3VL-8B-Instruct-Q4_K_M.gguf'
-  : require('path').join(require('os').homedir(), 'models', 'Qwen3VL-8B-Instruct-Q4_K_M.gguf'));
+  ? 'C:\\models'
+  : require('path').join(require('os').homedir(), 'models'));
 
 const SYSTEM_PROMPT = `You are Jarwizz, a voice-activated AI assistant. Given a user command, create a plan of discrete steps.
 
