@@ -35,19 +35,45 @@ On Linux the same CMake flags apply (`-DGGML_VULKAN=1`). Prebuilt Vulkan-enabled
 
 Verify the build reports Vulkan at startup — running `llama-server --help` should list `--vulkan` / Vulkan-related flags, and starting the server (step 1c) must log `vulkan` device detection, not just `cpu`.
 
-### 1b. Download Qwen3-VL-4B GGUF (Q4_K_M)
+### 1b. Choose and download a model GGUF
 
-The MVP model is **Qwen3-VL-4B, GGUF Q4_K_M** quantization — vision-capable, Apache 2.0 licensed, runs in ~3–6 GB at Q4, a good fit for 8 GB total RAM. Use the Q4_K_M quantized file (not the full-precision model).
+Jarwizz is model-agnostic: any instruction-tuned GGUF served by llama.cpp works.
+The backend reads `LLAMACPP_URL` / `MODEL_PATH` from `backend/.env`, so switching
+models is a config change, never a code change.
+
+Two properties matter for the default feature set:
+
+- **Vision-capable** (a `*VL*` model with an `mmproj` projector) — required for
+  `read_screen` / screen understanding. Text-only models work for everything else
+  and are often better at planning/chat per GB.
+- **Q4_K_M quantization** — the quality/size sweet spot. Prefer higher quants
+  only when VRAM allows.
+
+Pick by available VRAM (weights + KV cache + projector must fit together):
+
+| VRAM | Recommended | Notes |
+|---|---|---|
+| ~4 GB | **Qwen3-VL-4B** Q4_K_M (~2.6 GB + mmproj) | Full feature set including vision; expect partial CPU offload and slower planning |
+| ~4 GB, no vision needed | Qwen3-4B-Instruct-2507 / Gemma 3 4B / Phi-4-mini, Q4_K_M | Faster and noticeably better at conversation/planning than a VL model squeezed onto the same card |
+| 8 GB | **Qwen3-VL-8B** Q4_K_M (~5.0 GB + mmproj) | Current dev-machine pick; full GPU offload with 8k context |
+| 12–16 GB+ | Larger VL models or an 8B at higher quant | Better reasoning; same setup steps |
+
+Download the chosen files:
 
 ```bash
-# Example using huggingface-cli (or download manually from Hugging Face):
 pip install -U "huggingface_hub[cli]"
+# Example — the 4B vision model:
 huggingface-cli download Qwen/Qwen3-VL-4B-GGUF --include "*Q4_K_M*" --local-dir ./models
-# Result should be a single .gguf file such as: qwen3-vl-4b-q4_k_m.gguf
-# Place it at e.g. C:\models\qwen3-vl-4b-q4_k_m.gguf  (Windows)  or  ~/models/  (Linux/macOS)
+# Vision models also need the projector file (mmproj-*.gguf) — see §9c for why it is mandatory.
+# Place them in e.g. C:\models\  (Windows)  or  ~/models/  (Linux/macOS)
 ```
 
-> If the exact repo/filename differs, pick the **Qwen3-VL-4B Q4_K_M GGUF** published by Qwen — the key properties are: Qwen3-VL-4B base, GGUF container, `Q4_K_M` quantization.
+> If exact repo/filenames differ, the key properties are: the base model chosen
+> above, GGUF container, `Q4_K_M` quantization, plus the matching `mmproj` for
+> vision-capable models.
+
+Throughout this guide, substitute your chosen model's filename wherever
+`qwen3-vl-4b-q4_k_m.gguf` appears.
 
 ### 1c. Smoke test — confirm Vulkan GPU offload is actually active
 
@@ -324,8 +350,10 @@ cmake --build ~/opt/llama.cpp/build --config Release -j"$(nproc)"
 
 ### 9c. Download the model
 
-Qwen3-VL-8B Q4_K_M fits entirely in 8 GB VRAM alongside its vision projector and an
-8k KV cache, so unlike the Windows box there is no CPU split:
+The current dev machine (RX 7600, 8 GB) runs **Qwen3-VL-8B Q4_K_M** with full
+GPU offload — see §1b's table for alternatives at other VRAM sizes. It fits
+entirely in 8 GB VRAM alongside its vision projector and an 8k KV cache, so
+unlike the original Windows box there is no CPU split:
 
 ```bash
 mkdir -p ~/models && cd ~/models

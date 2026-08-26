@@ -4,9 +4,11 @@ A voice-activated, **locally-run** personal AI assistant. Jarwizz plans your req
 routes each step to the right channel (web, Gmail, desktop, or the model itself),
 executes it with a safety approval gate, and speaks the result back.
 
-Everything runs on your machine: the model runtime is **llama.cpp (Vulkan)** serving
-**Qwen3-VL-8B (Q4_K_M)** — one open-weight model handles both planning *and* screen vision,
-no cloud account required for the core experience.
+Everything runs on your machine: the model runtime is **llama.cpp (Vulkan or ROCm)**
+serving any instruction-tuned GGUF you choose — one open-weight local model handles
+both planning *and* screen vision (vision-capable models), no cloud account required
+for the core experience. See `docs/06-SETUP-GUIDE.md` §1b for model recommendations
+by hardware.
 
 ## What v1 does
 
@@ -71,7 +73,7 @@ pieces (portal screenshots, `ydotool`, evdev push-to-talk) the Windows sections 
 - `docs/01-PROJECT-SPEC.md` — product spec & MVP definition
 - `docs/02-ARCHITECTURE.md` — system design
 - `docs/05-SAFETY-AND-GUARDRAILS.md` — risk tiers, approval gate, whitelist
-- `docs/06-SETUP-GUIDE.md` — full setup (model, Gmail OAuth, voice)
+- `docs/06-SETUP-GUIDE.md` — full setup (models by hardware, Gmail OAuth, voice)
 - `docs/07-IMPLEMENTATION-PLAN.md` — phase plan + v1 status
 - `docs/09-MIGRATION-NOTES.md` — Ollama → llama.cpp migration
 - `docs/10-USER-GUIDE.md` — how to actually use Jarwizz
